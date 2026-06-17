@@ -55,6 +55,9 @@ logs/
 *.log
 *.tmp
 
+# ===== REFERENCE REPOS (not part of this project) =====
+useful_resources/
+
 # ===== OS =====
 Thumbs.db
 Desktop.ini
