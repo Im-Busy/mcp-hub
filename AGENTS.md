@@ -20,7 +20,8 @@ Every new AI session MUST start by reading these files in order:
 
 1. **`C:\Dev\.opencode\standards\workspace-conventions.md`** — Global coding, bash, git, and tooling standards
 2. **`MEMORY.md`** — Persistent handover state: current objective, completed tasks, discovered issues, next session priorities
-3. **`README.md`** — Project overview, structure, phase roadmap
+3. **`DESIGN.md`** — Canonical design reference: architecture, module designs, implementation plan, pattern lineage
+4. **`README.md`** — Project overview, structure, phase roadmap
 
 ## Rust Environment
 
