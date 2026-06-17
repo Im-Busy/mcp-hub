@@ -2,26 +2,45 @@
 
 > Unified MCP management platform — proxy, package manager, inspector, and memory
 
+## Installation
+
+| Platform | Command |
+|----------|---------|
+| **Cargo (any)** | `cargo install mcp-hub` |
+| **npm/npx (any)** | `npx mcp-hub serve` |
+| **pip (any)** | `pip install mcp-hub` |
+| **uvx (any)** | `uvx mcp-hub serve` |
+| **Homebrew (macOS)** | `brew install mcp-hub` |
+| **Scoop (Windows)** | `scoop install mcp-hub` |
+| **winget (Windows)** | `winget install mcp-hub` |
+| **Pre-built binary** | Download from [GitHub Releases](https://github.com/Im-Busy/mcp-hub/releases) |
+
+Or build from source:
+
+```bash
+git clone https://github.com/Im-Busy/mcp-hub.git
+cd mcp-hub
+cargo build --release
+```
+
 ## Quick Start
 
 ```bash
-# Build
-cargo build --release
+# Run the proxy server
+mcp-hub serve --config mcp-hub.example.json
 
-# Run with config
-cargo run -- serve --config mcp-hub.example.json
-
-# Validate config
-cargo run -- validate --config mcp-hub.example.json
+# Or via npx
+npx mcp-hub serve --config mcp-hub.example.json
 
 # Check status
-cargo run -- status --config mcp-hub.example.json
+mcp-hub status --config mcp-hub.example.json
 
-# Run tests
+# Validate config
+mcp-hub validate --config mcp-hub.example.json
+
+# Run tests (from source)
 cargo test
 ```
-
-## Project Structure
 
 ```
 mcp-hub/
@@ -75,5 +94,5 @@ mcp-hub aggregates multiple MCP servers behind a single endpoint, providing:
 | Phase | Status | Key Deliverables |
 |-------|--------|------------------|
 | **Phase 1** | ✅ Complete | Proxy aggregation, HTTP server, dual middleware, CLI, config system |
-| **Phase 2** | ⏳ Stubbed | BearerAuthClient, smart caching, encrypted credentials, package management, host integration |
+| **Phase 2** | 🟡 In Progress | Real transport connections ✅, BearerAuthClient, smart caching, encrypted credentials, package management, host integration |
 | **Phase 3** | 🔜 Planned | Stderr→MCP notification pipeline, Web UI inspector, interactive CLI |

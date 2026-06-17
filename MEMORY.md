@@ -4,7 +4,7 @@
 
 ## Current Objective
 
-Implement Phase 2 of mcp-hub: BearerAuthClient decorator, smart caching (return cached + bg refresh), real tool discovery via rmcp's list_tools(), AES-256-GCM encrypted credentials, package management, and host integration.
+Implement Phase 2 P1: BearerAuthClient decorator, smart caching (return cached + bg refresh), AES-256-GCM encrypted credentials. P0 (real rmcp transport connections + tool discovery) is complete.
 
 ## System State & Metrics
 
@@ -12,8 +12,10 @@ Implement Phase 2 of mcp-hub: BearerAuthClient decorator, smart caching (return 
 - **Tech stack:** Rust (edition 2021), rmcp 1.7, Axum 0.8, Tantivy 0.22
 - **Build tool:** cargo (rustup-managed toolchain)
 - **Phase 1 status:** Complete — proxy aggregation, HTTP server, dual middleware, CLI, config system (7 modules, ~1,100 lines)
-- **Phase 2 status:** Stubbed — module declarations exist, placeholders only
-- **Tests:** 2 inline unit test modules (proxy.rs, clipboard.rs). No integration tests yet.
+- **Phase 2 P0 status:** Complete — real rmcp transport connections (stdio + HTTP), tool discovery via list_tools()
+- **Phase 2 P1+ status:** Stubbed — BearerAuthClient, smart caching, encrypted credentials, package mgmt, host integration
+- **Tests:** 18 tests passing (13 unit + 5 integration)
+- **Distribution plan:** Documented — crates.io + GitHub Releases (P0), npm/pip/Homebrew/Scoop/winget/uvx (P1), Docker (P2)
 
 ## Completed Tasks
 
@@ -27,27 +29,33 @@ Implement Phase 2 of mcp-hub: BearerAuthClient decorator, smart caching (return 
 - [x] Phase 1: Transport layer (TransportMode enum, STDIO, HTTP, Pipe stubs)
 - [x] Phase 1: CLI with 7 subcommands (serve, status, validate, inspect, install, publish, host)
 - [x] Phase 1: 16 structured error variants
-- [x] Phase 1: Clipboard memory system (stack + KV) — implemented but flagged Phase 2
-- [x] Project scaffolding completed (opencode.jsonc, kilo.json, .kilo/, .gitignore, README.md, MEMORY.md)
+- [x] Phase 1: Clipboard memory system (stack + KV)
+- [x] Phase 2 P0: Real rmcp STDIO transport (handler.serve via child process)
+- [x] Phase 2 P0: Real rmcp HTTP transport (StreamableHttpClientTransport::from_uri)
+- [x] Phase 2 P0: Real tool discovery (list_tools() replaces placeholder)
+- [x] Phase 2 P0: ProxyServer.call_tool() executes real MCP calls
+- [x] Phase 2 P0: Graceful shutdown (drop clients + kill child processes)
+- [x] reqwest 0.12 → 0.13 upgrade (to match rmcp 1.7)
+- [x] Project scaffolding completed (opencode.jsonc, kilo.json, .kilo/, .gitignore, README.md, MEMORY.md, DESIGN.md)
+- [x] 8 reference repos cloned to useful_resources/useful-repos/
+- [x] Comprehensive DESIGN.md (851 lines)
+- [x] Complete distribution plan (10 channels)
 
 ## Discovered Issues & Blockers
 
-- **Placeholder tool discovery:** ProxyServer::connect_all() uses register_placeholder_tools() — registers one dummy "discover" tool per server. Needs real rmcp list_tools() integration.
-- **No real transport connections:** TransportHandle created but never actually connected. rmcp client setup needed.
-- **No integration tests:** Only inline unit tests in proxy.rs and clipboard.rs. Full integration test suite needed.
-- **Existing Cargo.lock may be stale:** After fresh clone, `cargo build` will regenerate. Not committed to git (in .gitignore for Rust libs, but should be committed for binaries).
-- **No git history:** Project was never committed before session data loss.
+- **BearerAuthClient disabled:** rmcp 1.7 StreamableHttpClient API changed (extra headers param in get_stream/post_message/delete_session). Needs adaptation.
+- **No integration test with real MCP server:** Transports wired but not integration-tested against a real MCP server spawn.
+- **CallToolRequestParams is non-exhaustive:** Can only construct via ::new(name) + field mutation.
 
 ## Next Session Agent Must
 
 1. Read this MEMORY.md to understand current state
-2. Review AGENTS.md for architecture, module map, and design principles
-3. Begin work on Phase 2 priority items:
-   - Real MCP transport connections via rmcp
-   - Tool discovery (list_tools) replacing placeholder
-   - BearerAuthClient decorator for transparent authentication
-4. Write integration tests alongside each new feature
-5. Run `cargo test` before declaring any task complete
+2. Review DESIGN.md for detailed module designs and implementation plan
+3. Begin Phase 2 P1:
+   - BearerAuthClient decorator (adapt to rmcp 1.7 API)
+   - Smart caching middleware (cached + background refresh)
+   - Integration tests with real MCP server spawn
+4. Run `cargo test` before declaring any task complete
 
 ## Key Decisions
 

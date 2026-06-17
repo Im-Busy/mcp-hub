@@ -388,17 +388,81 @@ mcp-hub is **Layer 0** — the unifying proxy that all AI clients connect to. It
 
 ---
 
-## Distribution Channels
+## Distribution Plan
 
-| Channel | Format | Target | Status |
-|---------|--------|--------|:---:|
-| **crates.io** | `cargo install mcp-hub` | Rust developers | 🔜 Planned |
-| **GitHub Releases** | Pre-built binaries (Win/Mac/Linux) | End users | 🔜 Planned |
-| **npm/npx** | Thin npm wrapper → download binary | Node.js ecosystem | Option |
-| **Homebrew** | macOS formula | macOS users | Option |
-| **Docker** | Container image | Docker-first users | Option |
+> Follows `C:\Dev\.opencode\standards\distribution-standards.md` framework.
 
-**Recommended**: crates.io + GitHub Releases binaries. Cargo.toml already configured: `repository = "https://github.com/Im-Busy/mcp-hub"`.
+**Target Consumers**: Developers (run mcp-hub as a service), AI clients (connect via JSON-RPC), end users (download binary).  
+**Deployment Model**: CLI tool + long-running service (single binary).  
+**Platforms**: Windows (x86_64), macOS (arm64/x86_64), Linux (x86_64).
+
+**Architecture**: One Rust binary → all channels. The binary is the only artifact that needs to be built. All other channels are URL pointers, thin wrappers, or package manifests pointing at the same binary.
+
+### Active Channels
+
+| Priority | Channel | Install Command | Package Type | Effort |
+|:---:|---------|-----------------|-------------|:---:|
+| 🔥 P0 | **crates.io** | `cargo install mcp-hub` | Rust crate (binary) | Low |
+| 🔥 P0 | **GitHub Releases** | Download `.exe` / binary from releases | Pre-built binaries (Win/Mac/Linux) | Low |
+| ✅ P1 | **npm/npx** | `npx mcp-hub serve` | npm wrapper → download binary | Low |
+| ✅ P1 | **bun/bunx** | `bunx mcp-hub serve` | Free — bun runs npm packages natively | Zero |
+| ✅ P1 | **pip** | `pip install mcp-hub` | Python wrapper → download binary | Medium |
+| ✅ P1 | **uvx** | `uvx mcp-hub serve` | Python wrapper → download binary | Medium |
+| ✅ P1 | **Homebrew** | `brew install mcp-hub` | Ruby formula → download macOS binary | Low |
+| ✅ P1 | **Scoop** | `scoop install mcp-hub` | JSON manifest → download Windows binary | Low |
+| ✅ P1 | **winget** | `winget install mcp-hub` | YAML manifest → download Windows .exe | Low |
+| ⬜ P2 | **Docker** | `docker run ghcr.io/imbusy/mcp-hub serve` | Container image (Dockerfile → COPY binary) | Medium |
+
+### Channel Details
+
+**P0 — crates.io + GitHub Releases (primary)**:
+- `Cargo.toml` already configured: `repository = "https://github.com/Im-Busy/mcp-hub"`
+- `cargo publish` → crates.io. GitHub Actions → build Win/Mac/Linux binaries → attach to release.
+- These are the canonical distribution channels. All other channels wrap these.
+
+**P1 — Language Ecosystem Wrappers (npm, pip, Homebrew, Scoop, winget)**:
+- All wrappers follow the same pattern: manifest/package.json → download the correct platform binary from GitHub Releases → execute.
+- **npm/npx**: `package.json` with `"bin": { "mcp-hub": "./download-and-run.js" }`. The JS script detects platform, downloads the right binary, executes it. bun/bunx works natively — zero extra work.
+- **pip/uvx**: Python wrapper package on PyPI. `setup.py` with platform detection, downloads binary via `urllib`, executes as subprocess. Same architecture as npm wrapper, different language.
+- **Homebrew**: Ruby formula in `homebrew-core` or custom tap. `url` points to GitHub Release tarball, `sha256` for verification.
+- **Scoop**: JSON manifest in `scoopinstaller/scoop-main` or custom bucket. `url` + `hash` → download `.exe`, add to PATH.
+- **winget**: YAML manifest submitted to `microsoft/winget-pkgs`. `InstallerUrl` → GitHub Release `.exe`, `InstallerSha256`.
+
+**P2 — Docker**:
+- `Dockerfile`: `FROM alpine:latest`, `COPY mcp-hub /usr/local/bin/`, `ENTRYPOINT ["mcp-hub"]`
+- Published to `ghcr.io/Im-Busy/mcp-hub` via GitHub Actions.
+
+### Channels Explicitly Skipped
+
+| Channel | Reason |
+|---------|--------|
+| **Chocolatey** | Redundant — winget (official Microsoft) + Scoop (dev favorite) already cover Windows. Three Windows package managers are maintenance overhead without proportional reach gain. |
+| **apt / dnf / pacman** | Distro-maintained — cannot self-publish. Requires distro maintainers to accept the package. Pursue only if Linux adoption justifies the effort. |
+| **Snap / Flatpak** | Sandboxed formats designed for desktop GUI apps. Overkill for a CLI tool — adds sandboxing complexity with no benefit for a proxy service. |
+| **conda-forge** | Python-only ecosystem. pip + uvx already cover Python users. conda adds complexity (non-Python compiled deps) that this project doesn't need. |
+| **Maven / Gradle** | Not a JVM project. |
+| **MCP Server** | mcp-hub IS the proxy infrastructure, not an MCP tool to be discovered. It aggregates tools; it's not itself a tool. |
+
+---
+
+## Module Language Profile
+
+> Follows `C:\Dev\.opencode\standards\distribution-standards.md` §3.
+
+| Module | Language | Profile | Why This Language |
+|--------|----------|---------|-------------------|
+| `src/proxy.rs` (aggregation, routing) | Rust | CPU-bound (tool registry ops, HashMap lookups) | Zero-cost abstractions, no GC pauses on the hot path |
+| `src/server.rs` (HTTP JSON-RPC) | Rust | I/O-bound (network) | Axum's async performance, but I/O-bound means language matters less here |
+| `src/middleware/tool_search.rs` (Tantivy BM25) | Rust | CPU-bound (search index, scoring) | Tantivy is Rust-only. BM25 over thousands of tools is genuinely CPU-bound |
+| `src/transports/` (process spawn, HTTP) | Rust | Mixed (process spawn = I/O, protocol = CPU) | rmcp is Rust-only. Process management benefits from Tokio |
+| `src/security/` (AES-GCM, auth) | Rust | CPU-bound (crypto) | RustCrypto crates are the gold standard. No FFI overhead |
+| `scripts/*.ps1` (Docker orchestration) | PowerShell | I/O-bound (docker compose, port checks) | Native Windows shell. No compiled language needed |
+| `web-ui/` (inspector, dashboard) | TypeScript/React | I/O-bound (browser rendering) | Only sensible choice for web UIs. Not on the proxy's critical path |
+
+### Rewrite Evaluation
+- Modules benefiting from Rust: 5 / 8 (proxy, server, search, transports, security)
+- Modules where language doesn't matter (I/O-bound): 2 / 8 (scripts, web-ui)
+- Verdict: Rust is the correct choice for the core. No rewrite needed. TypeScript added only where Rust can't go (Web UI).
 
 ---
 

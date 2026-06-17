@@ -762,17 +762,64 @@ We **never** depend on the researched repos. We study their patterns, reimplemen
 
 ## 8. Distribution & Deployment
 
-### 8.1 Recommended Channels
+> Follows `C:\Dev\.opencode\standards\distribution-standards.md` framework.
 
-| Channel | Command | Priority |
-|---------|---------|:---:|
-| **crates.io** | `cargo install mcp-hub` | 🔥 Primary |
-| **GitHub Releases** | Download binary (Win/Mac/Linux) | 🔥 Primary |
-| **npm/npx** | `npx mcp-hub serve` | Option |
-| **Homebrew** | `brew install mcp-hub` | Option |
-| **Docker** | `docker run mcp-hub serve` | Option |
+**Target Consumers**: Developers (run mcp-hub as a service), AI clients (connect via JSON-RPC), end users (download binary).  
+**Deployment Model**: CLI tool + long-running service (single binary).  
+**Platforms**: Windows (x86_64), macOS (arm64/x86_64), Linux (x86_64).
 
-### 8.2 Release Configuration
+**Architecture**: One Rust binary → all channels. All channels are URL pointers, thin wrappers, or package manifests pointing at the same GitHub Release binary.
+
+### 8.1 All Distribution Channels
+
+| Priority | Channel | Install Command | Package Type | Effort |
+|:---:|---------|-----------------|-------------|:---:|
+| 🔥 P0 | **crates.io** | `cargo install mcp-hub` | Rust crate (binary) | Low |
+| 🔥 P0 | **GitHub Releases** | Download `.exe` / binary from releases | Pre-built binaries (Win/Mac/Linux) | Low |
+| ✅ P1 | **npm/npx** | `npx mcp-hub serve` | npm wrapper → download binary | Low |
+| ✅ P1 | **bun/bunx** | `bunx mcp-hub serve` | Free — bun runs npm natively | Zero |
+| ✅ P1 | **pip** | `pip install mcp-hub` | Python wrapper → download binary | Medium |
+| ✅ P1 | **uvx** | `uvx mcp-hub serve` | Python wrapper → download binary | Medium |
+| ✅ P1 | **Homebrew** | `brew install mcp-hub` | Ruby formula → download macOS binary | Low |
+| ✅ P1 | **Scoop** | `scoop install mcp-hub` | JSON manifest → download Windows binary | Low |
+| ✅ P1 | **winget** | `winget install mcp-hub` | YAML manifest → download Windows .exe | Low |
+| ⬜ P2 | **Docker** | `docker run ghcr.io/imbusy/mcp-hub serve` | Container image | Medium |
+
+### 8.2 Wrapper Architecture
+
+All P1 channels are thin wrappers pointing at GitHub Releases:
+
+```
+GitHub Release (.exe / macOS binary / linux binary)
+     │
+     ├── npm package.json   → npx mcp-hub serve
+     │                        (detect platform → download binary → execute)
+     │                        Also gives bun/bunx for free
+     │
+     ├── pip setup.py       → pip install mcp-hub / uvx mcp-hub serve
+     │                        (Python wrapper, same download-and-execute pattern)
+     │
+     ├── Homebrew formula   → brew install mcp-hub
+     │   (.rb → url + sha256 → download macOS binary)
+     │
+     ├── Scoop manifest     → scoop install mcp-hub
+     │   (.json → url + hash → download Windows .exe → add to PATH)
+     │
+     └── winget manifest    → winget install mcp-hub
+         (.yaml → InstallerUrl + InstallerSha256 → download Windows .exe)
+```
+
+### 8.3 Channels Explicitly Skipped
+
+| Channel | Reason |
+|---------|--------|
+| Chocolatey | Redundant — winget + Scoop already cover Windows |
+| apt / dnf / pacman | Distro-maintained, cannot self-publish |
+| Snap / Flatpak | Sandboxed formats are for GUI apps, not CLI tools |
+| conda-forge | Python-only — pip + uvx already cover this |
+| Maven / Gradle | Not a JVM project |
+
+### 8.4 Release Configuration
 
 ```toml
 [profile.release]
@@ -782,7 +829,7 @@ codegen-units = 1
 strip = true
 ```
 
-### 8.3 Config File Convention
+### 8.5 Config File Convention
 
 Default config path: `mcp-hub.json` in current directory. Override with `-c/--config`.
 
@@ -807,8 +854,8 @@ Example configuration already exists: `mcp-hub.example.json` (90 lines, 2 config
 
 ### 9.2 Phase 2 Gate
 
-- [ ] Real MCP transport connections (stdio spawn + HTTP connect via rmcp)
-- [ ] Tool discovery replaces placeholder with real list_tools()
+- [x] Real MCP transport connections (stdio spawn + HTTP connect via rmcp) — Phase 2 P0 ✅
+- [x] Tool discovery replaces placeholder with real list_tools() ✅
 - [ ] BearerAuthClient decorator injects auth headers
 - [ ] Smart caching returns cached results with background refresh
 - [ ] AES-256-GCM encryption for credential storage
