@@ -53,7 +53,7 @@ tower-http = { version = "0.6", features = ["cors"] }
 hyper = { version = "1", features = ["server", "http1", "http2"] }
 
 # HTTP client
-reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls"], default-features = false }
+reqwest = { version = "0.13", features = ["json", "stream", "rustls"], default-features = false }
 
 # Full-text search
 tantivy = "0.22"

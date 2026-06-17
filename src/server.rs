@@ -118,21 +118,17 @@ async fn handle_mcp_request(
             let arguments = body
                 .get("params")
                 .and_then(|p| p.get("arguments"))
-                .cloned()
-                .unwrap_or(serde_json::Value::Null);
+                .cloned();
 
-            match state.proxy.route_tool_call(tool_name).await {
-                Ok(server) => {
+            match state.proxy.call_tool(tool_name, arguments).await {
+                Ok(result_text) => {
                     Json(json!({
                         "jsonrpc": "2.0",
                         "id": id,
                         "result": {
                             "content": [{
                                 "type": "text",
-                                "text": format!(
-                                    "Tool '{}' routed to server '{}'. Arguments: {}",
-                                    tool_name, server, arguments
-                                )
+                                "text": result_text
                             }]
                         }
                     }))

@@ -1,81 +1,38 @@
 //! HTTP Streamable transport — connects to MCP servers via HTTP.
 //!
-//! Pattern adopted from MCProxy's BearerAuthClient decorator:
-//! - Wraps reqwest client with automatic auth token injection
-//! - Supports streamable HTTP endpoints
+//! Pattern adopted from MCProxy: BearerAuthClient decorator for transparent
+//! auth token injection, StreamableHttpClientTransport for rmcp integration.
+//!
+//! NOTE: BearerAuthClient currently disabled due to rmcp 1.7 API changes.
+//! Auth tokens are passed via ServerConfig and will be re-enabled in Phase 2.1.
 
 use crate::config::ServerConfig;
 use crate::error::{HubError, HubResult};
-use tracing::{info, debug};
+use rmcp::service::{RoleClient, RunningService, ServiceExt};
+use rmcp::transport::streamable_http_client::StreamableHttpClientTransport;
+use std::sync::Arc;
+use tracing::info;
 
-/// Configuration for HTTP transport connection.
-#[derive(Debug, Clone)]
-pub struct HttpTransportConfig {
-    /// Base URL for the MCP endpoint.
-    pub url: String,
-    /// Optional bearer token for authentication.
-    pub auth_token: Option<String>,
-    /// Request timeout in seconds.
-    pub timeout_secs: u64,
-}
-
-impl HttpTransportConfig {
-    /// Create from a ServerConfig::Http variant.
-    pub fn from_config(config: &ServerConfig, server_name: &str) -> HubResult<Self> {
-        match config {
-            ServerConfig::Http {
-                url,
-                authorization_token,
-            } => Ok(Self {
-                url: url.clone(),
-                auth_token: authorization_token.clone(),
-                timeout_secs: 30,
-            }),
-            _ => Err(HubError::Transport(format!(
-                "Expected HTTP config for server '{}'",
-                server_name
-            ))),
-        }
-    }
-}
-
-impl Default for HttpTransportConfig {
-    fn default() -> Self {
-        Self {
-            url: "http://localhost:8080/mcp".to_string(),
-            auth_token: None,
-            timeout_secs: 30,
-        }
-    }
-}
-
-/// Connect to an HTTP Streamable MCP server.
-///
-/// Returns a tuple of (reqwest::Client, config) for use with
-/// rmcp's streamable HTTP client transport.
-pub fn connect_http(
-    config: &HttpTransportConfig,
+/// Connect to an HTTP Streamable MCP server via rmcp.
+pub async fn connect_http(
+    config: &ServerConfig,
     server_name: &str,
-) -> HubResult<(reqwest::Client, String)> {
-    info!(
-        server = %server_name,
-        url = %config.url,
-        "Connecting to HTTP MCP server"
-    );
+) -> HubResult<RunningService<RoleClient, ()>> {
+    let url = match config {
+        ServerConfig::Http { url, .. } => url,
+        _ => return Err(HubError::Transport(format!(
+            "Expected HTTP config for server '{}'", server_name
+        ))),
+    };
 
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(config.timeout_secs))
-        .build()
-        .map_err(|e| HubError::Connection {
-            server: server_name.to_string(),
-            message: format!("Failed to build HTTP client: {}", e),
-        })?;
+    info!(server = %server_name, url = %url, "Connecting to HTTP MCP server");
 
-    debug!(
-        server = %server_name,
-        has_auth = config.auth_token.is_some(),
-        "HTTP client created"
-    );
+    let uri: Arc<str> = Arc::from(url.as_str());
+    let transport = StreamableHttpClientTransport::from_uri(uri);
+    let handler = ();
 
-    Ok((client, config.url.clone()))
+    handler.serve(transport).await.map_err(|e| HubError::Connection {
+        server: server_name.to_string(),
+        message: format!("rmcp HTTP serve failed: {}", e),
+    })
 }

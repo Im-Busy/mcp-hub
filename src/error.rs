@@ -46,6 +46,12 @@ pub enum HubError {
     #[error("MCP protocol error: {0}")]
     Mcp(String),
 
+    #[error("MCP service error: {0}")]
+    McpService(String),
+
+    #[error("Process spawn error: {0}")]
+    ProcessSpawn(String),
+
     #[error("Package error: {0}")]
     Package(String),
 
