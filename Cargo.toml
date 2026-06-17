@@ -1,0 +1,106 @@
+[package]
+name = "mcp-hub"
+version = "0.1.0"
+edition = "2021"
+description = "Unified MCP management platform — proxy, package manager, inspector, and memory"
+authors = ["Joey Chiu"]
+license = "MIT"
+repository = "https://github.com/Im-Busy/mcp-hub"
+
+[[bin]]
+name = "mcp-hub"
+path = "src/main.rs"
+
+[lib]
+name = "mcp_hub"
+path = "src/lib.rs"
+
+[dependencies]
+# MCP Protocol
+rmcp = { version = "1.7", features = [
+    "client",
+    "server",
+    "macros",
+    "transport-child-process",
+    "transport-streamable-http-client",
+    "transport-streamable-http-client-reqwest",
+    "transport-streamable-http-server",
+    "transport-io",
+    "transport-async-rw",
+    "reqwest",
+    "auth",
+] }
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["codec"] }
+futures-util = "0.3"
+bytes = "1"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+toml_edit = "0.22"
+
+# CLI
+clap = { version = "4.5", features = ["derive", "env"] }
+
+# HTTP server (for web UI + proxy endpoint)
+axum = { version = "0.8", features = ["json"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors"] }
+hyper = { version = "1", features = ["server", "http1", "http2"] }
+
+# HTTP client
+reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls"], default-features = false }
+
+# Full-text search
+tantivy = "0.22"
+
+# Security
+aes-gcm = "0.10"
+zeroize = { version = "1", features = ["derive"] }
+rand = "0.8"
+sha2 = "0.10"
+base64 = "0.22"
+uuid = { version = "1", features = ["v4"] }
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# Logging & observability
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Async trait
+async-trait = "0.1"
+
+# Regex (for middleware filtering)
+regex = "1"
+
+# Date/time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Directories
+dirs = "6"
+
+# URL handling
+url = "2"
+
+# Process management (Unix)
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+
+[dev-dependencies]
+tempfile = "3"
+tokio-test = "0.4"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true

@@ -1,0 +1,90 @@
+{
+  "mcp_servers": {
+    "filesystem": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "C:\\Dev"],
+      "env": {}
+    },
+    "github": {
+      "type": "http",
+      "url": "https://api.githubcopilot.com/mcp/",
+      "authorization_token": "Bearer YOUR_GITHUB_PAT"
+    }
+  },
+  "http_server": {
+    "host": "127.0.0.1",
+    "port": 8081,
+    "cors_enabled": true,
+    "cors_origins": ["*"],
+    "shutdown_timeout_secs": 10
+  },
+  "middleware": {
+    "proxy": [
+      {
+        "type": "description_enricher",
+        "enabled": true,
+        "config": {
+          "suffix": "(via mcp-hub)"
+        }
+      }
+    ],
+    "client": {
+      "default": [
+        {
+          "type": "logging",
+          "enabled": true,
+          "config": {
+            "level": "info"
+          }
+        },
+        {
+          "type": "security",
+          "enabled": true,
+          "config": {
+            "rules": [
+              {
+                "name": "no_system_commands",
+                "pattern": "(?i)(rm\\s+-rf|sudo\\s+|passwd\\s+|shutdown|reboot|format\\s+)",
+                "block_message": "System commands are not allowed",
+                "enabled": true
+              },
+              {
+                "name": "no_sensitive_files",
+                "pattern": "(?i)(/etc/passwd|/etc/shadow|\\.ssh/|\\.aws/|\\.env|config\\.json|secrets)",
+                "block_message": "Access to sensitive files is blocked",
+                "enabled": true
+              }
+            ],
+            "log_blocked": true
+          }
+        }
+      ],
+      "servers": {
+        "github": [
+          {
+            "type": "tool_filter",
+            "enabled": true,
+            "config": {
+              "allow": "^(github___create_|github___search_|github___list_|github___get_)"
+            }
+          }
+        ]
+      }
+    }
+  },
+  "registry": {
+    "url": "https://registry.mcp-hub.dev",
+    "token": null
+  },
+  "hosts": {
+    "auto_register": false,
+    "enabled": []
+  },
+  "tools": {
+    "clipboard_enabled": true,
+    "search_enabled": true,
+    "max_tools_limit": 50,
+    "search_threshold": 0.1
+  }
+}

@@ -1,0 +1,60 @@
+# ===== RUST =====
+# Build artifacts
+target/
+*.rs.bk
+*.pdb
+
+# ===== PYTHON =====
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+*.egg
+
+# Unit test / coverage
+htmlcov/
+.coverage
+.coverage.*
+.pytest_cache/
+
+# Type checking
+.mypy_cache/
+.ruff_cache/
+
+# Environments
+.env
+.venv
+env/
+venv/
+
+# ===== IDE =====
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+*.code-workspace
+
+# ===== NODE.JS =====
+node_modules/
+bun.lock
+pnpm-lock.yaml
+yarn.lock
+
+# ===== LOGS =====
+logs/
+*.log
+*.tmp
+
+# ===== OS =====
+Thumbs.db
+Desktop.ini
