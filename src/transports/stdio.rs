@@ -27,31 +27,32 @@ pub async fn connect_stdio(
 
     info!(server = %server_name, command = %command, "Spawning STDIO MCP server");
 
-    // On Windows, resolve .cmd/.bat script commands that tokio may not find
-    #[cfg(windows)]
-    let command = if !command.contains('.') {
-        format!("{}.cmd", command)
-    } else {
-        command.clone()
+    let try_spawn = |cmd_name: &str| -> Result<_, std::io::Error> {
+        let mut c = tokio::process::Command::new(cmd_name);
+        c.args(args);
+        for (k, v) in env { c.env(k, v); }
+        #[cfg(unix)]
+        unsafe { c.pre_exec(|| { libc::setpgid(0, 0); Ok(()) }); }
+        c.stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::inherit())
+            .spawn()
     };
-    #[cfg(not(windows))]
-    let command = command.clone();
 
-    let mut cmd = tokio::process::Command::new(&command);
-    cmd.args(args);
-    for (k, v) in env { cmd.env(k, v); }
-
-    #[cfg(unix)]
-    unsafe { cmd.pre_exec(|| { libc::setpgid(0, 0); Ok(()) }); }
-
-    let mut child = cmd
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::inherit())
-        .spawn()
-        .map_err(|e| HubError::ProcessSpawn(format!(
-            "Failed to spawn '{}' for server '{}': {}", command, server_name, e
-        )))?;
+    let mut child = try_spawn(command).or_else(|e| {
+        #[cfg(windows)]
+        if e.kind() == std::io::ErrorKind::NotFound
+            && !command.contains('.')
+        {
+            let cmd_name = format!("{}.cmd", command);
+            info!(server = %server_name, "Retrying with {}", cmd_name);
+            return try_spawn(&cmd_name);
+        }
+        Err(e)
+    })
+    .map_err(|e| HubError::ProcessSpawn(format!(
+        "Failed to spawn '{}' for server '{}': {}", command, server_name, e
+    )))?;
 
     info!(server = %server_name, pid = ?child.id(), "STDIO server process started");
 

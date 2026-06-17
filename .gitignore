@@ -58,6 +58,9 @@ logs/
 # ===== REFERENCE REPOS (not part of this project) =====
 useful_resources/
 
+# ===== LOCAL CONFIG (contains secrets) =====
+mcp-hub.json
+
 # ===== OS =====
 Thumbs.db
 Desktop.ini
