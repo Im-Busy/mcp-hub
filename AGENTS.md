@@ -398,6 +398,26 @@ mcp-hub is **Layer 0** — the unifying proxy that all AI clients connect to. It
 
 **Architecture**: One Rust binary → all channels. The binary is the only artifact that needs to be built. All other channels are URL pointers, thin wrappers, or package manifests pointing at the same binary.
 
+### 🔥 P0 Bootstrap — Vibe Installer (One Command, Auto-Detects Everything)
+
+```bash
+# macOS / Linux / WSL
+curl -fsSL https://raw.githubusercontent.com/Im-Busy/mcp-hub/main/install.sh | sh
+
+# Windows (PowerShell)
+irm https://raw.githubusercontent.com/Im-Busy/mcp-hub/main/install.ps1 | iex
+
+# Interactive mode — show detected system, let user choose method
+curl -fsSL https://raw.githubusercontent.com/Im-Busy/mcp-hub/main/install.sh | sh -s -- --interactive
+```
+
+The vibe installer (`install.sh` + `install.ps1`) auto-detects OS, architecture, and available package managers, then picks the best install method. Falls back to direct binary download from GitHub Releases if no package manager is available. **Zero hosting cost** — served from GitHub raw content. No domain, no server.
+
+| File | Platform | Size | Status |
+|------|----------|------|:---:|
+| `install.sh` | macOS, Linux, WSL | ~120 lines | ✅ Implemented |
+| `install.ps1` | Windows (PowerShell) | ~140 lines | ✅ Implemented |
+
 ### Active Channels
 
 | Priority | Channel | Install Command | Package Type | Effort |

@@ -4,8 +4,23 @@
 
 ## Installation
 
+### 🔥 Quick Install (auto-detect everything)
+
+```bash
+# macOS / Linux / WSL
+curl -fsSL https://raw.githubusercontent.com/Im-Busy/mcp-hub/main/install.sh | sh
+
+# Windows (PowerShell)
+irm https://raw.githubusercontent.com/Im-Busy/mcp-hub/main/install.ps1 | iex
+```
+
+The vibe installer picks the best method for your system — no decisions needed.
+
+### All Install Options
+
 | Platform | Command |
 |----------|---------|
+| **Auto (any)** | `curl .../install.sh \| sh` or `irm .../install.ps1 \| iex` |
 | **Cargo (any)** | `cargo install mcp-hub` |
 | **npm/npx (any)** | `npx mcp-hub serve` |
 | **pip (any)** | `pip install mcp-hub` |
@@ -13,7 +28,7 @@
 | **Homebrew (macOS)** | `brew install mcp-hub` |
 | **Scoop (Windows)** | `scoop install mcp-hub` |
 | **winget (Windows)** | `winget install mcp-hub` |
-| **Pre-built binary** | Download from [GitHub Releases](https://github.com/Im-Busy/mcp-hub/releases) |
+| **Binary** | Download from [GitHub Releases](https://github.com/Im-Busy/mcp-hub/releases) |
 
 Or build from source:
 
