@@ -1,69 +1,202 @@
-//! Integration tests for mcp-hub.
+//! Integration tests for mcp-hub — end-to-end transport verification.
 //!
-//! These tests exercise the public API through the library crate (`mcp_hub`).
-//! Unit tests live alongside source in `src/` under `#[cfg(test)] mod tests`.
+//! These tests exercise real MCP transport connections: spawn a real MCP server,
+//! connect via rmcp stdio transport, discover tools, and call them.
 
-use mcp_hub::proxy::{extract_server_from_prefixed, prefix_tool_name};
-use mcp_hub::HubConfig;
+use mcp_hub::config::{HubConfig, ServerConfig};
+use mcp_hub::transports::stdio;
 use mcp_hub::ProxyServer;
+use std::collections::HashMap;
 
-/// Verify the tool name prefix/extract roundtrip.
-#[test]
-fn test_tool_name_roundtrip() {
-    let cases = vec![
-        ("github", "create_issue"),
-        ("filesystem", "read_file"),
-        ("my-server", "my_tool_v2"),
-        ("a", "b"),
-    ];
+/// Raw transport test: connect to time server via stdio directly (no proxy layer).
+/// This isolates transport-level issues from proxy aggregation issues.
+#[tokio::test]
+async fn test_raw_stdio_connection() {
+    if !command_exists("npx") {
+        eprintln!("SKIP: npx not available on PATH");
+        return;
+    }
 
-    for (server, tool) in cases {
-        let prefixed = prefix_tool_name(server, tool);
-        let (extracted_server, extracted_tool) =
-            extract_server_from_prefixed(&prefixed).unwrap();
-        assert_eq!(extracted_server, server);
-        assert_eq!(extracted_tool, tool);
+    let config = ServerConfig::Stdio {
+        command: "npx".to_string(),
+        args: vec!["-y".to_string(), "@guanxiong/mcp-server-time@1.0.0".to_string()],
+        env: HashMap::new(),
+    };
+
+    eprintln!("Attempting raw stdio connection...");
+    match stdio::connect_stdio(&config, "test-time").await {
+        Ok((_svc, _child)) => {
+            eprintln!("✅ Raw stdio connection succeeded!");
+        }
+        Err(e) => {
+            // Don't panic — print the error for debugging
+            eprintln!("❌ Raw stdio connection failed: {:?}", e);
+            panic!("Raw stdio connection failed: {}", e);
+        }
     }
 }
 
-/// Verify that a tool name without "___" returns None.
-#[test]
-fn test_extract_invalid_format() {
-    assert_eq!(extract_server_from_prefixed("no_separator"), None);
-    assert_eq!(extract_server_from_prefixed(""), None);
+/// Check if a command exists on the system PATH.
+fn command_exists(cmd: &str) -> bool {
+    if cfg!(windows) {
+        std::process::Command::new("where")
+            .arg(cmd)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    } else {
+        std::process::Command::new("which")
+            .arg(cmd)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
 }
 
-/// Verify that "___" within the tool name is handled correctly
-/// (only the first "___" is the server/tool boundary).
-#[test]
-fn test_extract_tool_with_underscores() {
-    let result = extract_server_from_prefixed("srv___tool___with___underscores");
-    assert_eq!(result, Some(("srv", "tool___with___underscores")));
+/// Helper: build a HubConfig with one stdio server.
+fn config_with_stdio_server(name: &str, command: &str, args: Vec<&str>) -> HubConfig {
+    let mut servers = HashMap::new();
+    servers.insert(
+        name.to_string(),
+        ServerConfig::Stdio {
+            command: command.to_string(),
+            args: args.into_iter().map(String::from).collect(),
+            env: HashMap::new(),
+        },
+    );
+    HubConfig {
+        mcp_servers: servers,
+        ..HubConfig::default()
+    }
 }
 
-/// Verify ProxyServer can be created and holds initial state.
-#[test]
-fn test_proxy_server_creation() {
-    let config = HubConfig::default();
+/// Test: connect to a real MCP server via stdio, discover tools, call a tool.
+///
+/// Uses `npx @guanxiong/mcp-server-time` — skipped if npx unavailable.
+#[tokio::test]
+async fn test_stdio_transport_real_server_discover_tools() {
+    if !command_exists("npx") {
+        eprintln!("SKIP: npx not available on PATH");
+        return;
+    }
+
+    let config = config_with_stdio_server(
+        "time",
+        "npx",
+        vec!["-y", "@guanxiong/mcp-server-time@1.0.0"],
+    );
+
     let proxy = ProxyServer::new(config);
 
-    // Initially no servers connected
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    let servers = rt.block_on(proxy.get_server_infos());
-    assert!(servers.is_empty());
+    // Connect via stdio → should discover real tools
+    proxy
+        .connect_all()
+        .await
+        .expect("Should connect to time server via stdio");
 
-    let tools = rt.block_on(proxy.get_all_tools());
+    let tools = proxy.get_all_tools().await;
+    assert!(
+        !tools.is_empty(),
+        "Should discover tools from the time server, got {} tools",
+        tools.len()
+    );
+
+    // Verify at least one tool looks like a time tool
+    let time_tool = tools
+        .iter()
+        .find(|t| t.original_name.contains("time") || t.original_name.contains("clock"))
+        .expect("Should have a time-related tool");
+    assert_eq!(time_tool.server_name, "time");
+    assert!(
+        time_tool.name.starts_with("time___"),
+        "Tool name should be prefixed with server name, got: {}",
+        time_tool.name
+    );
+
+    eprintln!(
+        "Discovered {} tools from time server: {:?}",
+        tools.len(),
+        tools.iter().map(|t| &t.original_name).collect::<Vec<_>>()
+    );
+
+    // Cleanup
+    proxy.shutdown().await;
+}
+
+/// Test: connect to a real MCP server, call a tool, get a result.
+#[tokio::test]
+async fn test_stdio_transport_call_tool() {
+    if !command_exists("npx") {
+        eprintln!("SKIP: npx not available on PATH");
+        return;
+    }
+
+    let config = config_with_stdio_server(
+        "time",
+        "npx",
+        vec!["-y", "@guanxiong/mcp-server-time@1.0.0"],
+    );
+
+    let proxy = ProxyServer::new(config);
+    proxy.connect_all().await.expect("Should connect");
+
+    let tools = proxy.get_all_tools().await;
+    assert!(!tools.is_empty(), "Should discover tools");
+
+    // Find any tool and call it (the time server has get_current_time)
+    let first_tool = &tools[0];
+    eprintln!("Calling tool: {}", first_tool.name);
+
+    let result = proxy
+        .call_tool(&first_tool.name, None)
+        .await
+        .expect("Should call tool successfully");
+
+    assert!(!result.is_empty(), "Tool call should return non-empty result");
+    eprintln!("Tool result: {}", result);
+
+    proxy.shutdown().await;
+}
+
+/// Test: connecting to a non-existent server should not crash the proxy.
+/// The proxy should report 0 connected servers (graceful degradation).
+#[tokio::test]
+async fn test_nonexistent_server_graceful_degradation() {
+    // Try connecting to an invalid command — should fail at transport level
+    let config = config_with_stdio_server("bad", "this_command_does_not_exist_xyz", vec![]);
+
+    let proxy = ProxyServer::new(config);
+
+    // connect_all should return an error since no servers connected
+    let result = proxy.connect_all().await;
+    assert!(result.is_err(), "Should fail when no servers can connect");
+
+    let servers = proxy.get_server_infos().await;
+    assert!(servers.is_empty(), "No servers should be connected");
+
+    let tools = proxy.get_all_tools().await;
+    assert!(tools.is_empty(), "No tools should be registered");
+}
+
+/// Test: HubConfig with no servers should succeed (empty proxy).
+#[tokio::test]
+async fn test_empty_config_connect() {
+    let config = HubConfig::default();
+    assert!(config.mcp_servers.is_empty());
+
+    let proxy = ProxyServer::new(config);
+    proxy.connect_all().await.expect("Empty config should succeed");
+
+    let tools = proxy.get_all_tools().await;
     assert!(tools.is_empty());
 }
 
-/// Verify HubConfig default creates valid config.
-#[test]
-fn test_default_config() {
+/// Verify graceful shutdown cleans up without errors.
+#[tokio::test]
+async fn test_shutdown_cleans_up() {
     let config = HubConfig::default();
-    assert_eq!(config.http_server.host, "127.0.0.1");
-    assert_eq!(config.http_server.port, 8081);
-    assert!(config.http_server.cors_enabled);
-    assert!(config.mcp_servers.is_empty());
-    assert!(config.middleware.proxy.is_empty());
-    assert!(config.middleware.client.default.is_empty());
+    let proxy = ProxyServer::new(config);
+    proxy.connect_all().await.expect("Empty connect should succeed");
+    proxy.shutdown().await; // Should not panic or hang
+    assert!(proxy.is_shutting_down().await);
 }

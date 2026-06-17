@@ -27,7 +27,17 @@ pub async fn connect_stdio(
 
     info!(server = %server_name, command = %command, "Spawning STDIO MCP server");
 
-    let mut cmd = tokio::process::Command::new(command);
+    // On Windows, resolve .cmd/.bat script commands that tokio may not find
+    #[cfg(windows)]
+    let command = if !command.contains('.') {
+        format!("{}.cmd", command)
+    } else {
+        command.clone()
+    };
+    #[cfg(not(windows))]
+    let command = command.clone();
+
+    let mut cmd = tokio::process::Command::new(&command);
     cmd.args(args);
     for (k, v) in env { cmd.env(k, v); }
 
@@ -37,7 +47,7 @@ pub async fn connect_stdio(
     let mut child = cmd
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::inherit())
         .spawn()
         .map_err(|e| HubError::ProcessSpawn(format!(
             "Failed to spawn '{}' for server '{}': {}", command, server_name, e
