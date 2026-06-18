@@ -29,6 +29,15 @@ OpenCode MCP Config (6 entries):
 
 - [x] Task 1: Add 5 critical servers back to OpenCode config
 - [x] Task 2: Note redundancy (critical servers remain in both places)
-- [ ] Task 3: Update DESIGN.md v2.0 with hybrid architecture + comprehensive reference map
-- [ ] Task 4: Update AGENTS.md with hybrid decision
-- [ ] Task 5: Update MEMORY.md with current state
+- [x] Task 3: Update DESIGN.md v2.0 with hybrid architecture + comprehensive reference map
+- [x] Task 4: Update AGENTS.md with hybrid decision
+- [x] Task 5: Update MEMORY.md with current state
+
+## Auto-Start
+
+- [x] Task 6: Create start-mcp-hub.ps1 auto-start script (detect if running, start if not)
+- [x] Task 7: Update start-all-mcp skill to reference mcp-hub auto-start
+
+## Complete ✅
+
+All 7 tasks done. Hybrid architecture deployed.
