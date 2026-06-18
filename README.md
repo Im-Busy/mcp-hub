@@ -109,5 +109,5 @@ mcp-hub aggregates multiple MCP servers behind a single endpoint, providing:
 | Phase | Status | Key Deliverables |
 |-------|--------|------------------|
 | **Phase 1** | ✅ Complete | Proxy aggregation, HTTP server, dual middleware, CLI, config system |
-| **Phase 2** | 🟡 In Progress | Real transport connections ✅, BearerAuthClient, smart caching, encrypted credentials, package management, host integration |
+| **Phase 2** | 🟡 In Progress | Real transport ✅, layered startup ✅, built-in tools ✅, Docker mgmt, BearerAuthClient, smart caching |
 | **Phase 3** | 🔜 Planned | Stderr→MCP notification pipeline, Web UI inspector, interactive CLI |

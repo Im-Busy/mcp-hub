@@ -88,6 +88,8 @@ dirs = "6"
 
 # URL handling
 url = "2"
+http = "1.4.2"
+sse-stream = "0.2.3"
 
 # Process management (Unix)
 [target.'cfg(unix)'.dependencies]
