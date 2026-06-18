@@ -462,7 +462,7 @@ docker run --rm -i mcp-hub-servers npx @modelcontextprotocol/server-memory
 **Deployment Model**: CLI tool + long-running service (single binary).  
 **Platforms**: Windows (x86_64), macOS (arm64/x86_64), Linux (x86_64).
 
-**Architecture**: One Rust binary → all channels. The binary is the only artifact that needs to be built. All other channels are URL pointers, thin wrappers, or package manifests pointing at the same binary.
+**Architecture Decision**: Hybrid — 5 critical servers connect directly to OpenCode for maximum stability. Remaining 16 servers managed by mcp-hub proxy at `localhost:9090/mcp`. Critical servers also exist in mcp-hub as fallback redundancy.
 
 ### 🔥 P0 Bootstrap — Vibe Installer (One Command, Auto-Detects Everything)
 

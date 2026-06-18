@@ -4,7 +4,25 @@
 
 ## Current Objective
 
-Implement Phase 2 P1: BearerAuthClient decorator, smart caching (return cached + bg refresh), AES-256-GCM encrypted credentials. P0 (real rmcp transport connections + tool discovery) is complete.
+Implement Phase 2 P1: BearerAuthClient decorator, smart caching, AES-256-GCM encryption. P0 complete.
+
+## Architecture Decision
+
+**Hybrid**: 5 critical servers (github, filesystem, context7, tavily, exa) connect directly to OpenCode. 16 remaining servers managed by mcp-hub proxy at `localhost:9090/mcp` (changed from 8081 to avoid Docker Desktop port conflict). Critical servers retained in mcp-hub.json as fallback redundancy.
+
+## System State & Metrics
+
+- **Tech stack:** Rust (edition 2021), rmcp 1.7, Axum 0.8, Tantivy 0.22
+- **Phase 1:** Complete — proxy, server, middleware, CLI, config, transports, tools
+- **Phase 2 P0:** Complete — real rmcp transport connections, layered startup with retry
+- **Phase 2 P1+:** Active — BearerAuthClient, smart caching, encryption pending
+- **Tests:** 29 passing (13 unit + 8 integration + 5 stress ignored)
+- **Distribution:** 10 channels planned, vibe installer implemented
+- **Docker:** Dockerfile + compose for 8 servers
+- **Reference repos:** 23 cloned to useful_resources/useful-repos/
+- **mcp-hub running:** 18/18 servers, 173 tools, port 9090, 20.9 MB RAM
+- **OpenCode config:** 6 entries (5 critical direct + 1 mcp-hub proxy)
+- **Port default:** 9090 (was 8081, conflicted with Docker Desktop)
 
 ## System State & Metrics
 

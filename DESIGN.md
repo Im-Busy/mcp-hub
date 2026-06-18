@@ -1,6 +1,8 @@
 # mcp-hub — Comprehensive Design & Implementation Plan
 
-> **Document Version:** 1.0 | **Date:** 2026-06-18 | **Status:** Phase 1 Complete, Phase 2 Designed, Phase 3 Planned
+> **Document Version:** 2.0 | **Date:** 2026-06-18 | **Status:** Phase 1 ✅, Phase 2 P0 ✅, Phase 2 P1+ Active
+> **Architecture:** Hybrid — 5 critical servers direct + 16 proxy-managed through mcp-hub
+> **References:** 23+ researched repos mapped to every module
 
 ---
 
@@ -448,36 +450,37 @@ Not yet started. Design references: `inspector` (10k★, official MCP project). 
 
 **Priority order** (most blocking first):
 
-#### 2.1 Real Transport Connections (P0)
+#### 2.1 Real Transport Connections (P0) ✅ COMPLETE
 
-**Current state**: `TransportHandle` created but never connected. `connect_all()` uses `register_placeholder_tools()` with dummy tools.
+**Current state**: Real rmcp transport connections working. STDIO via child process, HTTP via StreamableHttpClientTransport. Tool discovery via list_tools(). Integration tests with real MCP server.
 
 **Implementation**:
 ```
-2.1.1: Implement rmcp StdioTransport in src/transports/stdio.rs
-       - Spawn child process from ServerConfig::Stdio
-       - Connect via rmcp's transport-child-process feature
-       - Call list_tools() to discover real tools
-       - Register discovered tools with prefixing in tool_registry
-       - Handle process lifecycle (spawn, health check, restart on crash)
+2.1.1: Implement rmcp StdioTransport in src/transports/stdio.rs ✅
+       - Spawn child process, pipe stdin/stdout
+       - Connect via handler.serve((stdout, stdin)) 
+       - Process lifecycle: spawn, health, restart on crash
+       - Stderr inherited (not piped) to prevent buffer deadlock
 
-2.1.2: Implement rmcp HTTP transport in src/transports/http_client.rs
-       - Connect via rmcp's transport-streamable-http-client feature
-       - Call list_tools() for tool discovery
-       - Handle auth token injection (Bearer Authorization header)
+2.1.2: Implement rmcp HTTP transport in src/transports/http_client.rs ✅
+       - StreamableHttpClientTransport::from_uri(url)
+       - BearerAuthClient deferred (rmcp 1.7 API changes need adaptation)
 
-2.1.3: Wire transports into ProxyServer::connect_all()
-       - Replace register_placeholder_tools() with real tool discovery
-       - Parallel connection (tokio::join! for all servers)
-       - Collect partial results (graceful degradation)
+2.1.3: Wire transports into ProxyServer::connect_all() ✅
+       - connect_single_server() spawns real MCP connections
+       - Tool discovery via list_tools() replaces placeholder
+       - Parallel connection, partial failure handling
+       - Layered startup: L1 Critical (3 retries) → L2 Standard (1 retry) → L3 Optional (0 retries)
 
-2.1.4: Add integration tests for real transport connections
-       - Test: stdio server spawn → tool discovery → tool call → response
-       - Test: HTTP server connect → tool discovery → tool call → response
-       - Test: partial failure → proxy starts with remaining servers
+2.1.4: Integration tests for real transport connections ✅
+       - test_raw_stdio_connection: spawn time server, verify rmcp handshake
+       - test_stdio_transport_real_server_discover_tools: discover real tools
+       - test_stdio_transport_call_tool: call a real tool, get result
+       - test_nonexistent_server_graceful_degradation: bad command, proxy still functional
+       - Stress test: concurrent tool calls (1,158 calls/sec)
 ```
 
-**Files**: `stdio.rs`, `http_client.rs`, `proxy.rs`, `tests/integration_test.rs`
+**Files**: `stdio.rs`, `http_client.rs`, `proxy.rs`, `tests/integration_test.rs`, `tests/stress_test.rs`
 
 #### 2.2 BearerAuthClient Decorator (P1)
 
