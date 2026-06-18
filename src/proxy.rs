@@ -91,8 +91,8 @@ impl ProxyServer {
 
     /// Connect to upstream servers in priority layers.
     ///
-    /// L1 (Critical): Synchronous with 3 retries, blocks. Must succeed.
-    /// L2/L3: Lazily connected on first tool access.
+    /// All servers connect at startup for maximum stability.
+    /// L1 (Critical): 3 retries, blocks. L2 (Standard): 1 retry. L3 (Optional): 0 retries.
     /// Built-in tools (L0) register immediately.
     pub async fn connect_all(&self) -> HubResult<()> {
         use crate::config::ServerLayer;
@@ -109,16 +109,24 @@ impl ProxyServer {
         }
 
         // Group servers by layer
-        let critical: Vec<_> = self.config.mcp_servers.iter()
-            .filter(|(_, c)| layer_of(c) == ServerLayer::Critical)
-            .collect();
-        let deferred: Vec<_> = self.config.mcp_servers.iter()
-            .filter(|(_, c)| layer_of(c) != ServerLayer::Critical)
-            .collect();
+        let by_layer = |layer: ServerLayer| -> Vec<_> {
+            self.config.mcp_servers.iter()
+                .filter(|(_, c)| layer_of(c) == layer)
+                .collect()
+        };
 
-        info!(critical = critical.len(), deferred = deferred.len(), "Layered connection plan");
+        let critical = by_layer(ServerLayer::Critical);
+        let standard = by_layer(ServerLayer::Standard);
+        let optional = by_layer(ServerLayer::Optional);
 
-        // L1: Critical — connect synchronously with retry
+        info!(
+            critical = critical.len(),
+            standard = standard.len(),
+            optional = optional.len(),
+            "Layered connection plan"
+        );
+
+        // L1: Critical — sync, 3 retries
         let mut critical_ok = 0;
         for (name, config) in &critical {
             match self.connect_with_retry(name, config, 3).await {
@@ -126,41 +134,64 @@ impl ProxyServer {
                     info.layer = ServerLayer::Critical;
                     self.store_connection(name, svc, &mut info, &tools, child).await;
                     critical_ok += 1;
-                    info!(server = %name, tools = tools.len(), "Critical server connected");
+                    info!(server = %name, tools = tools.len(), "Critical connected");
                 }
                 Err(e) => {
-                    error!(server = %name, error = %e, "Critical server FAILED after retries");
-                    let info = ConnectedServerInfo {
-                        name: (*name).clone(), config: (*config).clone(),
-                        connected: false, tool_count: 0,
-                        last_refresh: Some(chrono::Utc::now()),
-                        layer: ServerLayer::Critical,
-                    };
-                    self.servers.write().await.insert((*name).clone(), info);
+                    error!(server = %name, error = %e, "Critical FAILED");
+                    self.register_failed_server(name, config, ServerLayer::Critical).await;
                 }
             }
         }
 
-        // L2/L3: Queue for lazy connection
-        for (name, config) in &deferred {
-            let layer = layer_of(config);
-            let info = ConnectedServerInfo {
-                name: (*name).clone(), config: (*config).clone(),
-                connected: false, tool_count: 0,
-                last_refresh: None,
-                layer: layer.clone(),
-            };
-            self.servers.write().await.insert((*name).clone(), info);
-            info!(server = %name, layer = ?layer, "Deferred for lazy connection");
+        // L2: Standard — sync, 1 retry
+        for (name, config) in &standard {
+            match self.connect_with_retry(name, config, 1).await {
+                Ok((svc, mut info, tools, child)) => {
+                    info.layer = ServerLayer::Standard;
+                    self.store_connection(name, svc, &mut info, &tools, child).await;
+                    info!(server = %name, tools = tools.len(), "Standard connected");
+                }
+                Err(e) => {
+                    warn!(server = %name, error = %e, "Standard FAILED");
+                    self.register_failed_server(name, config, ServerLayer::Standard).await;
+                }
+            }
         }
 
-        info!(critical_ok, "Connection phase complete");
+        // L3: Optional — sync, 0 retries
+        for (name, config) in &optional {
+            match self.connect_with_retry(name, config, 0).await {
+                Ok((svc, mut info, tools, child)) => {
+                    info.layer = ServerLayer::Optional;
+                    self.store_connection(name, svc, &mut info, &tools, child).await;
+                    info!(server = %name, tools = tools.len(), "Optional connected");
+                }
+                Err(e) => {
+                    warn!(server = %name, error = %e, "Optional FAILED (non-blocking)");
+                    self.register_failed_server(name, config, ServerLayer::Optional).await;
+                }
+            }
+        }
+
+        let connected_count = self.mcp_clients.read().await.len();
+        info!(critical_ok, connected = connected_count, total = server_count, "Connection complete");
 
         if critical_ok == 0 && !critical.is_empty() {
             return Err(HubError::Config("Failed to connect to any critical server".into()));
         }
 
         Ok(())
+    }
+
+    /// Register a failed server with connected=false.
+    async fn register_failed_server(&self, name: &str, config: &ServerConfig, layer: crate::config::ServerLayer) {
+        let info = ConnectedServerInfo {
+            name: name.to_string(), config: config.clone(),
+            connected: false, tool_count: 0,
+            last_refresh: Some(chrono::Utc::now()),
+            layer,
+        };
+        self.servers.write().await.insert(name.to_string(), info);
     }
 
     /// Retry connection with exponential backoff.
@@ -221,37 +252,8 @@ impl ProxyServer {
         self.servers.write().await.insert(name.to_string(), info.clone());
     }
 
-    /// Get all aggregated tools, lazily connecting deferred servers.
+    /// Get all aggregated tools.
     pub async fn get_all_tools(&self) -> Vec<AggregatedTool> {
-        // Trigger lazy connection of deferred servers
-        let deferred: Vec<_> = {
-            let servers = self.servers.read().await;
-            servers.iter()
-                .filter(|(_, s)| !s.connected && s.last_refresh.is_none())
-                .map(|(name, s)| (name.clone(), s.config.clone()))
-                .collect()
-        };
-        for (name, config) in &deferred {
-            let layer = layer_of(config);
-            let retries = match layer {
-                crate::config::ServerLayer::Standard => 1u32,
-                _ => 0,
-            };
-            info!(server = %name, layer = ?layer, "Lazy connecting");
-            match self.connect_with_retry(name, config, retries).await {
-                Ok((svc, mut info, tools, child)) => {
-                    info.layer = layer;
-                    self.store_connection(name, svc, &mut info, &tools, child).await;
-                    info!(server = %name, tools = tools.len(), "Lazy connection succeeded");
-                }
-                Err(e) => {
-                    warn!(server = %name, error = %e, "Lazy connection failed");
-                    if let Some(s) = self.servers.write().await.get_mut(name) {
-                        s.last_refresh = Some(chrono::Utc::now()); // mark as attempted
-                    }
-                }
-            }
-        }
         self.tool_registry.read().await.values().cloned().collect()
     }
 
