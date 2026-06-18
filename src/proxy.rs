@@ -95,6 +95,9 @@ impl ProxyServer {
         let server_count = self.config.mcp_servers.len();
         info!("Connecting to {} upstream servers via rmcp", server_count);
 
+        // Register built-in tools first (always available, even with no upstream servers)
+        self.register_builtin_tools().await;
+
         if server_count == 0 {
             info!("No MCP servers configured — proxy will start empty");
             return Ok(());
@@ -159,6 +162,47 @@ impl ProxyServer {
         }
 
         Ok(())
+    }
+
+    /// Register built-in tools that are always available.
+    async fn register_builtin_tools(&self) {
+        let builtins = vec![
+            AggregatedTool {
+                name: "mcp-hub___get_current_time".to_string(),
+                original_name: "get_current_time".to_string(),
+                description: "Get the current time in human-readable format (UTC)".to_string(),
+                server_name: "mcp-hub".to_string(),
+                input_schema: None,
+            },
+            AggregatedTool {
+                name: "mcp-hub___get_time_iso".to_string(),
+                original_name: "get_time_iso".to_string(),
+                description: "Get the current time in ISO 8601 format".to_string(),
+                server_name: "mcp-hub".to_string(),
+                input_schema: None,
+            },
+        ];
+
+        let mut registry = self.tool_registry.write().await;
+        let mut routing = self.tool_routing.write().await;
+        for tool in builtins {
+            routing.insert(tool.name.clone(), "mcp-hub".to_string());
+            registry.insert(tool.name.clone(), tool);
+        }
+
+        info!(tools = 2, "Registered built-in tools");
+    }
+
+    /// Handle a built-in tool call (server "mcp-hub").
+    fn handle_builtin_tool(&self, tool_name: &str) -> HubResult<String> {
+        match tool_name {
+            "get_current_time" => Ok(crate::tools::time::get_current_time()),
+            "get_time_iso" => Ok(crate::tools::time::get_current_time_iso()),
+            "get_unix_timestamp" => Ok(crate::tools::time::get_unix_timestamp().to_string()),
+            _ => Err(HubError::ToolNotFound(format!(
+                "Built-in tool '{}' not found", tool_name
+            ))),
+        }
     }
 
     /// Connect to a single server and discover its tools.
@@ -243,6 +287,11 @@ impl ProxyServer {
         // Extract original tool name
         let (_, actual_tool_name) = extract_server_from_prefixed(prefixed_name)
             .ok_or_else(|| HubError::InvalidToolFormat(prefixed_name.to_string()))?;
+
+        // Handle built-in tools (server "mcp-hub")
+        if server_name == "mcp-hub" {
+            return self.handle_builtin_tool(actual_tool_name);
+        }
 
         // Get the MCP client for this server
         let clients = self.mcp_clients.read().await;

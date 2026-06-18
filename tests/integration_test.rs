@@ -101,11 +101,11 @@ async fn test_stdio_transport_real_server_discover_tools() {
         tools.len()
     );
 
-    // Verify at least one tool looks like a time tool
+    // Verify at least one tool looks like a time tool (not a built-in)
     let time_tool = tools
         .iter()
-        .find(|t| t.original_name.contains("time") || t.original_name.contains("clock"))
-        .expect("Should have a time-related tool");
+        .find(|t| t.server_name == "time" && (t.original_name.contains("time") || t.original_name.contains("clock")))
+        .expect("Should have a time-related tool from time server");
     assert_eq!(time_tool.server_name, "time");
     assert!(
         time_tool.name.starts_with("time___"),
@@ -143,8 +143,9 @@ async fn test_stdio_transport_call_tool() {
     let tools = proxy.get_all_tools().await;
     assert!(!tools.is_empty(), "Should discover tools");
 
-    // Find any tool and call it (the time server has get_current_time)
-    let first_tool = &tools[0];
+    // Find a time-server tool (skip built-in tools)
+    let first_tool = tools.iter().find(|t| t.server_name == "time")
+        .expect("Should have a tool from time server");
     eprintln!("Calling tool: {}", first_tool.name);
 
     let result = proxy
@@ -175,12 +176,15 @@ async fn test_nonexistent_server_graceful_degradation() {
     assert!(servers.is_empty(), "No servers should be connected");
 
     let tools = proxy.get_all_tools().await;
-    assert!(tools.is_empty(), "No tools should be registered");
+    // Built-in tools still present; no server tools should exist
+    let server_tools: Vec<_> = tools.iter().filter(|t| t.server_name != "mcp-hub").collect();
+    assert!(server_tools.is_empty(), "No server tools should be registered, got: {:?}", server_tools);
+    assert!(!tools.is_empty(), "Built-in tools should still exist");
 }
 
-/// Test: HubConfig with no servers should succeed (empty proxy).
+/// Test: HubConfig with no servers should still have built-in tools.
 #[tokio::test]
-async fn test_empty_config_connect() {
+async fn test_empty_config_with_builtins() {
     let config = HubConfig::default();
     assert!(config.mcp_servers.is_empty());
 
@@ -188,7 +192,38 @@ async fn test_empty_config_connect() {
     proxy.connect_all().await.expect("Empty config should succeed");
 
     let tools = proxy.get_all_tools().await;
-    assert!(tools.is_empty());
+    // Built-in tools are always available
+    assert!(tools.len() >= 2, "Should have at least 2 built-in tools, got {}", tools.len());
+    let has_time = tools.iter().any(|t| t.name == "mcp-hub___get_current_time");
+    assert!(has_time, "Should have built-in get_current_time tool");
+}
+
+/// Test: Call built-in time tool directly.
+#[tokio::test]
+async fn test_builtin_time_tool() {
+    let config = HubConfig::default();
+    let proxy = ProxyServer::new(config);
+    proxy.connect_all().await.expect("Should connect (even with no servers)");
+
+    let result = proxy.call_tool("mcp-hub___get_current_time", None).await
+        .expect("Should call built-in time tool");
+
+    assert!(result.contains("UTC"), "Should contain UTC, got: {}", result);
+    eprintln!("Built-in time: {}", result);
+}
+
+/// Test: Call built-in ISO time tool.
+#[tokio::test]
+async fn test_builtin_time_iso() {
+    let config = HubConfig::default();
+    let proxy = ProxyServer::new(config);
+    proxy.connect_all().await.expect("Should connect");
+
+    let result = proxy.call_tool("mcp-hub___get_time_iso", None).await
+        .expect("Should call ISO time tool");
+
+    assert!(result.contains("T"), "Should be ISO format, got: {}", result);
+    eprintln!("ISO time: {}", result);
 }
 
 /// Verify graceful shutdown cleans up without errors.
