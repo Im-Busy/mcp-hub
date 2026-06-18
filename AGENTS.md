@@ -214,6 +214,72 @@ mcp-hub is **Layer 0** — the unifying proxy that all AI clients connect to. It
 
 ---
 
+## Docker-First MCP Management
+
+As many MCP servers as possible should run as Docker containers for stability, isolation, and reproducibility.
+
+### Docker Architecture
+
+```
+mcp-hub (stdin transport) → docker run --rm -i <image> <command>
+                            │
+                            ├── mcp-hub-servers image (pre-built)
+                            │   ├── npx packages: memory, github, sequential-thinking,
+                            │   │   task-master, context7, tavily, exa, playwright
+                            │   └── uvx packages: mcp-server-fetch, duckduckgo, markitdown
+                            │
+                            ├── Standalone Docker containers
+                            │   ├── searxng (docker-stuff/searxng)
+                            │   ├── graphiti (docker-stuff/graphiti)
+                            │   └── playwright (dedicated container for browser access)
+                            │
+                            └── Native (no Docker needed)
+                                ├── Built-in tools: get_current_time, get_time_iso
+                                ├── lean-ctx (local binary)
+                                └── chrome-devtools (needs local Chrome)
+```
+
+### How It Works
+
+mcp-hub's stdio transport spawns Docker containers instead of npx processes:
+
+```json
+{
+  "type": "stdio",
+  "command": "docker",
+  "args": ["run", "--rm", "-i", "mcp-hub-servers", "npx", "@modelcontextprotocol/server-memory"],
+  "layer": "standard"
+}
+```
+
+The `-i` flag keeps stdin open. Docker pipes stdin/stdout to the container. mcp-hub's `handler.serve((stdout, stdin))` works unchanged. No code changes needed.
+
+### Build & Run
+
+```bash
+# Build the base image (one-time, ~5 min)
+docker build -t mcp-hub-servers -f docker/Dockerfile .
+
+# Start all Dockerized MCP servers
+docker compose -f docker/docker-compose.yml up -d
+
+# Run a single server directly
+docker run --rm -i mcp-hub-servers npx @modelcontextprotocol/server-memory
+```
+
+### Docker vs npx Comparison
+
+| Metric | npx | Docker |
+|--------|-----|--------|
+| Cold start | ~2s (download) | Instant (pre-built) |
+| Isolation | OS process | Container |
+| Resource limits | None | CPU/memory via Docker |
+| Reproducibility | npm version only | Image hash |
+| Management | Individual processes | docker compose unified |
+| Memory overhead | Per-process | Shared base image layers |
+
+---
+
 ## Complete Feature Inventory
 
 ### CLI Commands (`src/cli.rs`)

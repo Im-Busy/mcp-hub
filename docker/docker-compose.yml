@@ -1,0 +1,73 @@
+# docker-compose.yml — All Docker-managed MCP servers
+#
+# mcp-hub connects to these via HTTP or docker run stdio transport.
+# Start: docker compose -f docker\docker-compose.yml up -d
+# Stop:  docker compose -f docker\docker-compose.yml down
+
+services:
+  # ── Self-hosted services (already at C:\Dev\docker-stuff) ──
+  # These are referenced from the workspace docker-stuff directory.
+  # Start separately or include here.
+
+  # ── Pre-built MCP server image ─────────────────────────────
+  # Build first: docker build -t mcp-hub-servers -f docker/Dockerfile .
+  # Then use: docker run --rm -i mcp-hub-servers npx <package>
+  # Or run as long-lived service:
+
+  mcp-memory:
+    image: mcp-hub-servers
+    command: ["npx", "@modelcontextprotocol/server-memory"]
+    stdin_open: true
+    tty: false
+    restart: unless-stopped
+
+  mcp-sequential-thinking:
+    image: mcp-hub-servers
+    command: ["npx", "@modelcontextprotocol/server-sequential-thinking"]
+    stdin_open: true
+    tty: false
+    restart: unless-stopped
+
+  mcp-task-master:
+    image: mcp-hub-servers
+    command: ["npx", "task-master-ai"]
+    stdin_open: true
+    tty: false
+    restart: unless-stopped
+    environment:
+      - TASK_MASTER_TOOLS=standard
+
+  mcp-context7:
+    image: mcp-hub-servers
+    command: ["npx", "@upstash/context7-mcp"]
+    stdin_open: true
+    tty: false
+    restart: unless-stopped
+
+  mcp-tavily:
+    image: mcp-hub-servers
+    command: ["npx", "tavily-mcp"]
+    stdin_open: true
+    tty: false
+    restart: unless-stopped
+
+  mcp-exa:
+    image: mcp-hub-servers
+    command: ["npx", "exa-mcp-server"]
+    stdin_open: true
+    tty: false
+    restart: unless-stopped
+
+  mcp-fetch:
+    image: mcp-hub-servers
+    command: ["uvx", "mcp-server-fetch"]
+    stdin_open: true
+    tty: false
+    restart: unless-stopped
+
+  mcp-duckduckgo:
+    image: mcp-hub-servers
+    command: ["uvx", "duckduckgo-mcp-server"]
+    stdin_open: true
+    tty: false
+    restart: unless-stopped
