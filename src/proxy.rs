@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 /// Aggregated tool information.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -51,6 +51,7 @@ pub struct ConnectedServerInfo {
     pub connected: bool,
     pub tool_count: usize,
     pub last_refresh: Option<chrono::DateTime<chrono::Utc>>,
+    pub layer: crate::config::ServerLayer,
 }
 
 /// The main proxy server that aggregates multiple MCP servers.
@@ -88,80 +89,170 @@ impl ProxyServer {
         }
     }
 
-    /// Connect to all configured upstream servers via real rmcp transports.
+    /// Connect to upstream servers in priority layers.
     ///
-    /// Spawns connections in parallel, handles partial failures gracefully.
+    /// L1 (Critical): Synchronous with 3 retries, blocks. Must succeed.
+    /// L2/L3: Lazily connected on first tool access.
+    /// Built-in tools (L0) register immediately.
     pub async fn connect_all(&self) -> HubResult<()> {
-        let server_count = self.config.mcp_servers.len();
-        info!("Connecting to {} upstream servers via rmcp", server_count);
+        use crate::config::ServerLayer;
 
-        // Register built-in tools first (always available, even with no upstream servers)
+        let server_count = self.config.mcp_servers.len();
+        info!("Connecting to {} servers in priority layers", server_count);
+
+        // L0: Built-in tools — always available immediately
         self.register_builtin_tools().await;
 
         if server_count == 0 {
-            info!("No MCP servers configured — proxy will start empty");
+            info!("No servers configured — serving built-in tools only");
             return Ok(());
         }
 
-        // Connect to each server in parallel
-        let mut handles = Vec::new();
-        for (server_name, server_config) in &self.config.mcp_servers {
-            let name = server_name.clone();
-            let cfg = server_config.clone();
-            handles.push(tokio::spawn(async move {
-                Self::connect_single_server(&name, &cfg).await
-            }));
-        }
+        // Group servers by layer
+        let critical: Vec<_> = self.config.mcp_servers.iter()
+            .filter(|(_, c)| layer_of(c) == ServerLayer::Critical)
+            .collect();
+        let deferred: Vec<_> = self.config.mcp_servers.iter()
+            .filter(|(_, c)| layer_of(c) != ServerLayer::Critical)
+            .collect();
 
-        let mut connected = 0;
-        let mut failed = 0;
+        info!(critical = critical.len(), deferred = deferred.len(), "Layered connection plan");
 
-        for handle in handles {
-            match handle.await {
-                Ok(Ok((svc, info, tools, child))) => {
-                    // Store client
-                    self.mcp_clients.write().await
-                        .insert(info.name.clone(), Arc::new(svc));
-
-                    // Store process handle if stdio
-                    if let Some(c) = child {
-                        self.process_handles.write().await
-                            .insert(info.name.clone(), c);
-                    }
-
-                    // Register tools with prefixing
-                    let mut registry = self.tool_registry.write().await;
-                    let mut routing = self.tool_routing.write().await;
-                    for tool in &tools {
-                        let agg = AggregatedTool::from_rmcp(tool, &info.name);
-                        routing.insert(agg.name.clone(), info.name.clone());
-                        registry.insert(agg.name.clone(), agg);
-                    }
-
-                    let server_name_for_log = info.name.clone();
-                    let tool_count = tools.len();
-                    self.servers.write().await.insert(info.name.clone(), info);
-                    connected += 1;
-                    info!(server = %server_name_for_log, tools = tool_count, "Connected");
+        // L1: Critical — connect synchronously with retry
+        let mut critical_ok = 0;
+        for (name, config) in &critical {
+            match self.connect_with_retry(name, config, 3).await {
+                Ok((svc, mut info, tools, child)) => {
+                    info.layer = ServerLayer::Critical;
+                    self.store_connection(name, svc, &mut info, &tools, child).await;
+                    critical_ok += 1;
+                    info!(server = %name, tools = tools.len(), "Critical server connected");
                 }
-                Ok(Err(e)) => {
-                    failed += 1;
-                    error!(error = %e, "Server connection failed");
-                }
-                Err(join_err) => {
-                    failed += 1;
-                    error!(error = %join_err, "Join error");
+                Err(e) => {
+                    error!(server = %name, error = %e, "Critical server FAILED after retries");
+                    let info = ConnectedServerInfo {
+                        name: (*name).clone(), config: (*config).clone(),
+                        connected: false, tool_count: 0,
+                        last_refresh: Some(chrono::Utc::now()),
+                        layer: ServerLayer::Critical,
+                    };
+                    self.servers.write().await.insert((*name).clone(), info);
                 }
             }
         }
 
-        info!(connected, failed, total = server_count, "Server connections complete");
+        // L2/L3: Queue for lazy connection
+        for (name, config) in &deferred {
+            let layer = layer_of(config);
+            let info = ConnectedServerInfo {
+                name: (*name).clone(), config: (*config).clone(),
+                connected: false, tool_count: 0,
+                last_refresh: None,
+                layer: layer.clone(),
+            };
+            self.servers.write().await.insert((*name).clone(), info);
+            info!(server = %name, layer = ?layer, "Deferred for lazy connection");
+        }
 
-        if connected == 0 && server_count > 0 {
-            return Err(HubError::Config("Failed to connect to any MCP server".into()));
+        info!(critical_ok, "Connection phase complete");
+
+        if critical_ok == 0 && !critical.is_empty() {
+            return Err(HubError::Config("Failed to connect to any critical server".into()));
         }
 
         Ok(())
+    }
+
+    /// Retry connection with exponential backoff.
+    async fn connect_with_retry(
+        &self,
+        name: &str,
+        config: &ServerConfig,
+        max_retries: u32,
+    ) -> HubResult<(
+        rmcp::service::RunningService<rmcp::RoleClient, ()>,
+        ConnectedServerInfo,
+        Vec<rmcp::model::Tool>,
+        Option<tokio::process::Child>,
+    )> {
+        let mut last_err = None;
+        for attempt in 0..=max_retries {
+            if attempt > 0 {
+                let delay = std::time::Duration::from_secs(2u64.pow(attempt - 1));
+                warn!(server = %name, attempt, retry_in_s = delay.as_secs(), "Retrying");
+                tokio::time::sleep(delay).await;
+            }
+            match Self::connect_single_server(name, config).await {
+                Ok(result) => return Ok(result),
+                Err(e) => last_err = Some(e),
+            }
+        }
+        Err(last_err.unwrap_or_else(|| HubError::Connection {
+            server: name.to_string(),
+            message: "Max retries exceeded".into(),
+        }))
+    }
+
+    /// Store a successful connection in the proxy state.
+    async fn store_connection(
+        &self,
+        name: &str,
+        svc: rmcp::service::RunningService<rmcp::RoleClient, ()>,
+        info: &mut ConnectedServerInfo,
+        tools: &[rmcp::model::Tool],
+        child: Option<tokio::process::Child>,
+    ) {
+        info.tool_count = tools.len();
+        info.connected = true;
+        info.last_refresh = Some(chrono::Utc::now());
+
+        self.mcp_clients.write().await.insert(name.to_string(), Arc::new(svc));
+        if let Some(c) = child {
+            self.process_handles.write().await.insert(name.to_string(), c);
+        }
+
+        let mut registry = self.tool_registry.write().await;
+        let mut routing = self.tool_routing.write().await;
+        for tool in tools {
+            let agg = AggregatedTool::from_rmcp(tool, name);
+            routing.insert(agg.name.clone(), name.to_string());
+            registry.insert(agg.name.clone(), agg);
+        }
+        self.servers.write().await.insert(name.to_string(), info.clone());
+    }
+
+    /// Get all aggregated tools, lazily connecting deferred servers.
+    pub async fn get_all_tools(&self) -> Vec<AggregatedTool> {
+        // Trigger lazy connection of deferred servers
+        let deferred: Vec<_> = {
+            let servers = self.servers.read().await;
+            servers.iter()
+                .filter(|(_, s)| !s.connected && s.last_refresh.is_none())
+                .map(|(name, s)| (name.clone(), s.config.clone()))
+                .collect()
+        };
+        for (name, config) in &deferred {
+            let layer = layer_of(config);
+            let retries = match layer {
+                crate::config::ServerLayer::Standard => 1u32,
+                _ => 0,
+            };
+            info!(server = %name, layer = ?layer, "Lazy connecting");
+            match self.connect_with_retry(name, config, retries).await {
+                Ok((svc, mut info, tools, child)) => {
+                    info.layer = layer;
+                    self.store_connection(name, svc, &mut info, &tools, child).await;
+                    info!(server = %name, tools = tools.len(), "Lazy connection succeeded");
+                }
+                Err(e) => {
+                    warn!(server = %name, error = %e, "Lazy connection failed");
+                    if let Some(s) = self.servers.write().await.get_mut(name) {
+                        s.last_refresh = Some(chrono::Utc::now()); // mark as attempted
+                    }
+                }
+            }
+        }
+        self.tool_registry.read().await.values().cloned().collect()
     }
 
     /// Register built-in tools that are always available.
@@ -232,6 +323,7 @@ impl ProxyServer {
                     connected: true,
                     tool_count: tools.tools.len(),
                     last_refresh: Some(chrono::Utc::now()),
+                    layer: layer_of(config),
                 };
 
                 Ok((svc, info, tools.tools, Some(child)))
@@ -250,16 +342,12 @@ impl ProxyServer {
                     connected: true,
                     tool_count: tools.tools.len(),
                     last_refresh: Some(chrono::Utc::now()),
+                    layer: layer_of(config),
                 };
 
                 Ok((svc, info, tools.tools, None))
             }
         }
-    }
-
-    /// Get all aggregated tools.
-    pub async fn get_all_tools(&self) -> Vec<AggregatedTool> {
-        self.tool_registry.read().await.values().cloned().collect()
     }
 
     /// Get a specific tool by prefixed name.
@@ -381,6 +469,14 @@ pub fn prefix_tool_name(server_name: &str, tool_name: &str) -> String {
 /// Extract the server name and tool name from a prefixed tool name.
 pub fn extract_server_from_prefixed(prefixed: &str) -> Option<(&str, &str)> {
     prefixed.find("___").map(|pos| (&prefixed[..pos], &prefixed[pos + 3..]))
+}
+
+/// Extract the layer from a ServerConfig.
+fn layer_of(config: &crate::config::ServerConfig) -> crate::config::ServerLayer {
+    match config {
+        crate::config::ServerConfig::Stdio { layer, .. } => layer.clone(),
+        crate::config::ServerConfig::Http { layer, .. } => layer.clone(),
+    }
 }
 
 #[cfg(test)]

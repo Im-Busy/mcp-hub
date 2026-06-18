@@ -21,6 +21,7 @@ async fn test_raw_stdio_connection() {
         command: "npx".to_string(),
         args: vec!["-y".to_string(), "@guanxiong/mcp-server-time@1.0.0".to_string()],
         env: HashMap::new(),
+        layer: mcp_hub::config::ServerLayer::Critical,
     };
 
     eprintln!("Attempting raw stdio connection...");
@@ -62,6 +63,7 @@ fn config_with_stdio_server(name: &str, command: &str, args: Vec<&str>) -> HubCo
             command: command.to_string(),
             args: args.into_iter().map(String::from).collect(),
             env: HashMap::new(),
+            layer: mcp_hub::config::ServerLayer::Critical,
         },
     );
     HubConfig {
@@ -173,7 +175,8 @@ async fn test_nonexistent_server_graceful_degradation() {
     assert!(result.is_err(), "Should fail when no servers can connect");
 
     let servers = proxy.get_server_infos().await;
-    assert!(servers.is_empty(), "No servers should be connected");
+    let connected: Vec<_> = servers.iter().filter(|s| s.connected).collect();
+    assert!(connected.is_empty(), "No servers should be connected, got: {:?}", connected);
 
     let tools = proxy.get_all_tools().await;
     // Built-in tools still present; no server tools should exist

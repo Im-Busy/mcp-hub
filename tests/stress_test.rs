@@ -24,6 +24,7 @@ fn time_server_config(_name: &str) -> ServerConfig {
         command: "npx".to_string(),
         args: vec!["-y".to_string(), "@guanxiong/mcp-server-time@1.0.0".to_string()],
         env: HashMap::new(),
+        layer: mcp_hub::config::ServerLayer::Critical,
     }
 }
 

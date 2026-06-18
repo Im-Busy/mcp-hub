@@ -63,6 +63,6 @@ pub mod hosts;
 pub mod security;
 pub mod tools;
 
-pub use config::HubConfig;
+pub use config::{HubConfig, ServerLayer};
 pub use error::{HubError, HubResult};
 pub use proxy::ProxyServer;

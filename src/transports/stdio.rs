@@ -19,7 +19,7 @@ pub async fn connect_stdio(
     server_name: &str,
 ) -> HubResult<(RunningService<RoleClient, ()>, Child)> {
     let (command, args, env) = match config {
-        ServerConfig::Stdio { command, args, env } => (command, args, env),
+        ServerConfig::Stdio { command, args, env, .. } => (command, args, env),
         _ => return Err(HubError::Transport(format!(
             "Expected Stdio config for server '{}'", server_name
         ))),

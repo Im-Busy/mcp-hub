@@ -7,6 +7,22 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+/// Server priority layer for connection ordering and reliability.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ServerLayer {
+    /// Critical: connect first, retry 3x with backoff, health monitored.
+    Critical,
+    /// Standard: connect after L1, retry 1x, default.
+    Standard,
+    /// Optional: connect async in background, no retry, best-effort.
+    Optional,
+}
+
+fn default_layer() -> ServerLayer {
+    ServerLayer::Standard
+}
+
 /// Top-level configuration.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct HubConfig {
@@ -47,6 +63,8 @@ pub enum ServerConfig {
         args: Vec<String>,
         #[serde(default)]
         env: HashMap<String, String>,
+        #[serde(default = "default_layer")]
+        layer: ServerLayer,
     },
 
     /// HTTP Streamable MCP server.
@@ -55,6 +73,8 @@ pub enum ServerConfig {
         url: String,
         #[serde(default)]
         authorization_token: Option<String>,
+        #[serde(default = "default_layer")]
+        layer: ServerLayer,
     },
 }
 
