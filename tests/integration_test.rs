@@ -19,7 +19,10 @@ async fn test_raw_stdio_connection() {
 
     let config = ServerConfig::Stdio {
         command: "npx".to_string(),
-        args: vec!["-y".to_string(), "@guanxiong/mcp-server-time@1.0.0".to_string()],
+        args: vec![
+            "-y".to_string(),
+            "@guanxiong/mcp-server-time@1.0.0".to_string(),
+        ],
         env: HashMap::new(),
         layer: mcp_hub::config::ServerLayer::Critical,
     };
@@ -106,7 +109,10 @@ async fn test_stdio_transport_real_server_discover_tools() {
     // Verify at least one tool looks like a time tool (not a built-in)
     let time_tool = tools
         .iter()
-        .find(|t| t.server_name == "time" && (t.original_name.contains("time") || t.original_name.contains("clock")))
+        .find(|t| {
+            t.server_name == "time"
+                && (t.original_name.contains("time") || t.original_name.contains("clock"))
+        })
         .expect("Should have a time-related tool from time server");
     assert_eq!(time_tool.server_name, "time");
     assert!(
@@ -146,7 +152,9 @@ async fn test_stdio_transport_call_tool() {
     assert!(!tools.is_empty(), "Should discover tools");
 
     // Find a time-server tool (skip built-in tools)
-    let first_tool = tools.iter().find(|t| t.server_name == "time")
+    let first_tool = tools
+        .iter()
+        .find(|t| t.server_name == "time")
         .expect("Should have a tool from time server");
     eprintln!("Calling tool: {}", first_tool.name);
 
@@ -155,7 +163,10 @@ async fn test_stdio_transport_call_tool() {
         .await
         .expect("Should call tool successfully");
 
-    assert!(!result.is_empty(), "Tool call should return non-empty result");
+    assert!(
+        !result.is_empty(),
+        "Tool call should return non-empty result"
+    );
     eprintln!("Tool result: {}", result);
 
     proxy.shutdown().await;
@@ -176,12 +187,23 @@ async fn test_nonexistent_server_graceful_degradation() {
 
     let servers = proxy.get_server_infos().await;
     let connected: Vec<_> = servers.iter().filter(|s| s.connected).collect();
-    assert!(connected.is_empty(), "No servers should be connected, got: {:?}", connected);
+    assert!(
+        connected.is_empty(),
+        "No servers should be connected, got: {:?}",
+        connected
+    );
 
     let tools = proxy.get_all_tools().await;
     // Built-in tools still present; no server tools should exist
-    let server_tools: Vec<_> = tools.iter().filter(|t| t.server_name != "mcp-hub").collect();
-    assert!(server_tools.is_empty(), "No server tools should be registered, got: {:?}", server_tools);
+    let server_tools: Vec<_> = tools
+        .iter()
+        .filter(|t| t.server_name != "mcp-hub")
+        .collect();
+    assert!(
+        server_tools.is_empty(),
+        "No server tools should be registered, got: {:?}",
+        server_tools
+    );
     assert!(!tools.is_empty(), "Built-in tools should still exist");
 }
 
@@ -192,11 +214,18 @@ async fn test_empty_config_with_builtins() {
     assert!(config.mcp_servers.is_empty());
 
     let proxy = ProxyServer::new(config);
-    proxy.connect_all().await.expect("Empty config should succeed");
+    proxy
+        .connect_all()
+        .await
+        .expect("Empty config should succeed");
 
     let tools = proxy.get_all_tools().await;
     // Built-in tools are always available
-    assert!(tools.len() >= 2, "Should have at least 2 built-in tools, got {}", tools.len());
+    assert!(
+        tools.len() >= 2,
+        "Should have at least 2 built-in tools, got {}",
+        tools.len()
+    );
     let has_time = tools.iter().any(|t| t.name == "mcp-hub___get_current_time");
     assert!(has_time, "Should have built-in get_current_time tool");
 }
@@ -206,12 +235,21 @@ async fn test_empty_config_with_builtins() {
 async fn test_builtin_time_tool() {
     let config = HubConfig::default();
     let proxy = ProxyServer::new(config);
-    proxy.connect_all().await.expect("Should connect (even with no servers)");
+    proxy
+        .connect_all()
+        .await
+        .expect("Should connect (even with no servers)");
 
-    let result = proxy.call_tool("mcp-hub___get_current_time", None).await
+    let result = proxy
+        .call_tool("mcp-hub___get_current_time", None)
+        .await
         .expect("Should call built-in time tool");
 
-    assert!(result.contains("UTC"), "Should contain UTC, got: {}", result);
+    assert!(
+        result.contains("UTC"),
+        "Should contain UTC, got: {}",
+        result
+    );
     eprintln!("Built-in time: {}", result);
 }
 
@@ -222,11 +260,205 @@ async fn test_builtin_time_iso() {
     let proxy = ProxyServer::new(config);
     proxy.connect_all().await.expect("Should connect");
 
-    let result = proxy.call_tool("mcp-hub___get_time_iso", None).await
+    let result = proxy
+        .call_tool("mcp-hub___get_time_iso", None)
+        .await
         .expect("Should call ISO time tool");
 
-    assert!(result.contains("T"), "Should be ISO format, got: {}", result);
+    assert!(
+        result.contains("T"),
+        "Should be ISO format, got: {}",
+        result
+    );
     eprintln!("ISO time: {}", result);
+}
+
+/// Given a ProxyServer connected to a real MCP time server,
+/// When the child process is killed,
+/// Then the health monitor detects death, removes tools, auto-reconnects,
+/// and tools reappear (verified via public API only).
+///
+/// Requires `npx` on PATH.  Long-running (~35-45s) due to 30s health-monitor
+/// poll interval plus exponential-backoff reconnection.
+#[tokio::test]
+#[ignore]
+async fn test_auto_reconnect_after_process_death() {
+    if !command_exists("npx") {
+        eprintln!("SKIP: npx not available on PATH");
+        return;
+    }
+
+    let config = config_with_stdio_server(
+        "time",
+        "npx",
+        vec!["-y", "@guanxiong/mcp-server-time@1.0.0"],
+    );
+
+    let proxy = std::sync::Arc::new(ProxyServer::new(config));
+    proxy
+        .connect_all()
+        .await
+        .expect("Should connect to time server");
+
+    // --- Step 3: verify tools available ---
+    let tools_before = proxy.get_all_tools().await;
+    let time_before: Vec<_> = tools_before
+        .iter()
+        .filter(|t| t.server_name == "time")
+        .collect();
+    assert!(
+        !time_before.is_empty(),
+        "Should discover time server tools, got {} total ({} from time)",
+        tools_before.len(),
+        time_before.len()
+    );
+    eprintln!(
+        "Pre-kill: {} tools, {} from time server: {:?}",
+        tools_before.len(),
+        time_before.len(),
+        time_before
+            .iter()
+            .map(|t| &t.original_name)
+            .collect::<Vec<_>>()
+    );
+
+    // Verify server reports connected
+    {
+        let servers = proxy.get_server_infos().await;
+        let time_srv = servers
+            .iter()
+            .find(|s| s.name == "time")
+            .expect("Should have time server info");
+        assert!(
+            time_srv.connected,
+            "Time server should be connected initially"
+        );
+    }
+
+    // Start health monitor (polls every 30s, reconnects dead servers)
+    proxy.start_health_monitor();
+
+    // Record original PID to confirm a NEW process after reconnect
+    let old_pid = {
+        let handle = proxy
+            .process_handle("time")
+            .await
+            .expect("Should have process handle for time server");
+        let child_opt = handle.read().await;
+        child_opt.as_ref().and_then(|c| c.id())
+    };
+    eprintln!("Original child PID: {:?}", old_pid);
+
+    // --- Step 4: kill the child process ---
+    {
+        let handle = proxy
+            .process_handle("time")
+            .await
+            .expect("Should have process handle for time server");
+        let mut child_opt = handle.write().await;
+        if let Some(child) = child_opt.as_mut() {
+            child.kill().await.expect("Should kill child process");
+        }
+    }
+    eprintln!("Killed time server process — waiting for auto-reconnect...");
+
+    // --- Steps 5-6: wait for detection + reconnect ---
+    // Health monitor: 30s sleep → detect → 2s^0*2=2s backoff → reconnect.
+    // Poll every 500ms with a 45s timeout for CI safety margin.
+    let start = std::time::Instant::now();
+    let timeout = std::time::Duration::from_secs(45);
+
+    // Phase A: detect that tools were removed (process died)
+    loop {
+        if start.elapsed() > timeout {
+            panic!(
+                "Timed out after {:?} waiting for tools to be removed after process death",
+                start.elapsed()
+            );
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+        let tools = proxy.get_all_tools().await;
+        let time_tools: Vec<_> = tools.iter().filter(|t| t.server_name == "time").collect();
+        if time_tools.is_empty() {
+            eprintln!("Tools removed from time server after {:?}", start.elapsed());
+            break;
+        }
+    }
+
+    // Phase B: poll for new PID (fresh spawn after reconnect)
+    let new_pid = loop {
+        if start.elapsed() > timeout {
+            panic!(
+                "Timed out after {:?} waiting for reconnection",
+                start.elapsed()
+            );
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+        let handle = proxy.process_handle("time").await;
+        if let Some(handle) = handle {
+            let child_opt = handle.read().await;
+            if let Some(child) = child_opt.as_ref() {
+                let current_pid = child.id();
+                if current_pid.is_some() && current_pid != old_pid {
+                    eprintln!(
+                        "Reconnected after {:?} — new PID: {:?}",
+                        start.elapsed(),
+                        current_pid
+                    );
+                    break current_pid;
+                }
+            }
+        }
+    };
+
+    assert!(
+        new_pid.is_some(),
+        "Reconnected child should have a valid PID"
+    );
+    assert_ne!(
+        new_pid, old_pid,
+        "Reconnected child PID should differ from old={:?}",
+        old_pid
+    );
+
+    // --- Step 7: verify tools reappear ---
+    let tools_after = proxy.get_all_tools().await;
+    let time_after: Vec<_> = tools_after
+        .iter()
+        .filter(|t| t.server_name == "time")
+        .collect();
+    assert!(
+        !time_after.is_empty(),
+        "Time server tools should reappear after auto-reconnect, got 0"
+    );
+    eprintln!(
+        "Reconnect tools: {:?}",
+        time_after
+            .iter()
+            .map(|t| &t.original_name)
+            .collect::<Vec<_>>()
+    );
+
+    // --- Step 8: verify connected server count via health endpoint ---
+    let servers = proxy.get_server_infos().await;
+    let time_srv = servers
+        .iter()
+        .find(|s| s.name == "time")
+        .expect("Should have time server info after reconnect");
+    assert!(
+        time_srv.connected,
+        "Time server should report connected after reconnect"
+    );
+    assert!(
+        time_srv.tool_count > 0,
+        "Time server should have >0 tools after reconnect, got {}",
+        time_srv.tool_count
+    );
+
+    // Cleanup
+    proxy.shutdown().await;
 }
 
 /// Verify graceful shutdown cleans up without errors.
@@ -234,7 +466,10 @@ async fn test_builtin_time_iso() {
 async fn test_shutdown_cleans_up() {
     let config = HubConfig::default();
     let proxy = ProxyServer::new(config);
-    proxy.connect_all().await.expect("Empty connect should succeed");
+    proxy
+        .connect_all()
+        .await
+        .expect("Empty connect should succeed");
     proxy.shutdown().await; // Should not panic or hang
     assert!(proxy.is_shutting_down().await);
 }

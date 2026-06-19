@@ -16,6 +16,7 @@ use tower_http::cors::{Any, CorsLayer};
 use tracing::info;
 
 use crate::config::HubConfig;
+use crate::error::ServeError;
 use crate::proxy::ProxyServer;
 
 /// Application state shared across all request handlers.
@@ -51,9 +52,12 @@ pub fn create_router(state: Arc<AppState>) -> Router {
 }
 
 /// Start the HTTP server and listen for connections.
-pub async fn serve(
-    state: Arc<AppState>,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+///
+/// # Errors
+/// Returns [`ServeError::Bind`] if the TCP listener cannot be created
+/// (e.g., port in use). Returns [`ServeError::Server`] for accept-loop
+/// errors. Returns `Ok(())` on graceful shutdown (Ctrl+C).
+pub async fn serve(state: Arc<AppState>) -> Result<(), ServeError> {
     let host = state.config.http_server.host.clone();
     let port = state.config.http_server.port;
     let addr = format!("{}:{}", host, port);
@@ -62,14 +66,20 @@ pub async fn serve(
 
     info!("Starting MCP proxy server on {}", addr);
 
-    let listener = tokio::net::TcpListener::bind(&addr).await?;
+    let listener = tokio::net::TcpListener::bind(&addr)
+        .await
+        .map_err(|e| ServeError::Bind {
+            addr: addr.clone(),
+            source: e,
+        })?;
 
     axum::serve(listener, router)
         .with_graceful_shutdown(async {
             tokio::signal::ctrl_c().await.ok();
             info!("Shutdown signal received");
         })
-        .await?;
+        .await
+        .map_err(ServeError::Server)?;
 
     Ok(())
 }
@@ -79,9 +89,7 @@ async fn handle_mcp_request(
     State(state): State<Arc<AppState>>,
     Json(body): Json<Value>,
 ) -> Json<Value> {
-    let method = body.get("method")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let method = body.get("method").and_then(|v| v.as_str()).unwrap_or("");
 
     let id = body.get("id").cloned();
 
@@ -115,80 +123,65 @@ async fn handle_mcp_request(
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
 
-            let arguments = body
-                .get("params")
-                .and_then(|p| p.get("arguments"))
-                .cloned();
+            let arguments = body.get("params").and_then(|p| p.get("arguments")).cloned();
 
             match state.proxy.call_tool(tool_name, arguments).await {
-                Ok(result_text) => {
-                    Json(json!({
-                        "jsonrpc": "2.0",
-                        "id": id,
-                        "result": {
-                            "content": [{
-                                "type": "text",
-                                "text": result_text
-                            }]
-                        }
-                    }))
-                }
-                Err(e) => {
-                    Json(json!({
-                        "jsonrpc": "2.0",
-                        "id": id,
-                        "error": {
-                            "code": -32602,
-                            "message": e.to_string()
-                        }
-                    }))
-                }
+                Ok(result_text) => Json(json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": {
+                        "content": [{
+                            "type": "text",
+                            "text": result_text
+                        }]
+                    }
+                })),
+                Err(e) => Json(json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "error": {
+                        "code": -32602,
+                        "message": e.to_string()
+                    }
+                })),
             }
         }
 
-        "initialize" => {
-            Json(json!({
-                "jsonrpc": "2.0",
-                "id": id,
-                "result": {
-                    "protocolVersion": "2024-11-05",
-                    "capabilities": {
-                        "tools": { "listChanged": true },
-                        "logging": {}
-                    },
-                    "serverInfo": {
-                        "name": "mcp-hub",
-                        "version": env!("CARGO_PKG_VERSION")
-                    }
+        "initialize" => Json(json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {
+                    "tools": { "listChanged": true },
+                    "logging": {}
+                },
+                "serverInfo": {
+                    "name": "mcp-hub",
+                    "version": env!("CARGO_PKG_VERSION")
                 }
-            }))
-        }
+            }
+        })),
 
-        "notifications/initialized" => {
-            Json(json!({
-                "jsonrpc": "2.0",
-                "id": id,
-                "result": {}
-            }))
-        }
+        "notifications/initialized" => Json(json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": {}
+        })),
 
-        _ => {
-            Json(json!({
-                "jsonrpc": "2.0",
-                "id": id,
-                "error": {
-                    "code": -32601,
-                    "message": format!("Method not found: {}", method)
-                }
-            }))
-        }
+        _ => Json(json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "error": {
+                "code": -32601,
+                "message": format!("Method not found: {}", method)
+            }
+        })),
     }
 }
 
 /// Health check endpoint.
-async fn handle_health(
-    State(state): State<Arc<AppState>>,
-) -> Json<Value> {
+async fn handle_health(State(state): State<Arc<AppState>>) -> Json<Value> {
     let servers = state.proxy.get_server_infos().await;
     let connected = servers.iter().filter(|s| s.connected).count();
 
@@ -202,9 +195,7 @@ async fn handle_health(
 }
 
 /// List all connected servers.
-async fn handle_list_servers(
-    State(state): State<Arc<AppState>>,
-) -> Json<Value> {
+async fn handle_list_servers(State(state): State<Arc<AppState>>) -> Json<Value> {
     let servers = state.proxy.get_server_infos().await;
     let server_list: Vec<Value> = servers
         .iter()
@@ -222,9 +213,7 @@ async fn handle_list_servers(
 }
 
 /// List all aggregated tools.
-async fn handle_list_tools(
-    State(state): State<Arc<AppState>>,
-) -> Json<Value> {
+async fn handle_list_tools(State(state): State<Arc<AppState>>) -> Json<Value> {
     let tools = state.proxy.get_all_tools().await;
     let tool_list: Vec<Value> = tools
         .iter()

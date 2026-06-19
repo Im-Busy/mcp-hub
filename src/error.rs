@@ -11,10 +11,7 @@ pub enum HubError {
     Config(String),
 
     #[error("Server connection error for '{server}': {message}")]
-    Connection {
-        server: String,
-        message: String,
-    },
+    Connection { server: String, message: String },
 
     #[error("Transport error: {0}")]
     Transport(String),
@@ -76,3 +73,22 @@ impl From<anyhow::Error> for HubError {
 
 /// Convenience result type alias.
 pub type HubResult<T> = Result<T, HubError>;
+
+/// Errors that can occur during server startup and operation.
+///
+/// Separates bind errors (potentially retryable) from runtime errors (fatal).
+#[derive(Error, Debug)]
+pub enum ServeError {
+    /// Failed to bind the TCP listener (e.g., AddrInUse, PermissionDenied).
+    #[error("Failed to bind to {addr}: {source}")]
+    Bind {
+        /// Address that was attempted
+        addr: String,
+        /// Underlying IO error
+        #[source]
+        source: std::io::Error,
+    },
+    /// Non-bind server error during accept loop or graceful shutdown.
+    #[error("Server error: {0}")]
+    Server(#[source] std::io::Error),
+}

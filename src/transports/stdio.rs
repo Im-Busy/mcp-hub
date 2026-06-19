@@ -19,10 +19,15 @@ pub async fn connect_stdio(
     server_name: &str,
 ) -> HubResult<(RunningService<RoleClient, ()>, Child)> {
     let (command, args, env) = match config {
-        ServerConfig::Stdio { command, args, env, .. } => (command, args, env),
-        _ => return Err(HubError::Transport(format!(
-            "Expected Stdio config for server '{}'", server_name
-        ))),
+        ServerConfig::Stdio {
+            command, args, env, ..
+        } => (command, args, env),
+        _ => {
+            return Err(HubError::Transport(format!(
+                "Expected Stdio config for server '{}'",
+                server_name
+            )))
+        }
     };
 
     info!(server = %server_name, command = %command, "Spawning STDIO MCP server");
@@ -30,34 +35,53 @@ pub async fn connect_stdio(
     let try_spawn = |cmd_name: &str| -> Result<_, std::io::Error> {
         let mut c = tokio::process::Command::new(cmd_name);
         c.args(args);
-        for (k, v) in env { c.env(k, v); }
+        for (k, v) in env {
+            c.env(k, v);
+        }
         #[cfg(unix)]
-        unsafe { c.pre_exec(|| { libc::setpgid(0, 0); Ok(()) }); }
+        unsafe {
+            c.pre_exec(|| {
+                libc::setpgid(0, 0);
+                Ok(())
+            });
+        }
         c.stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::inherit())
             .spawn()
     };
 
-    let mut child = try_spawn(command).or_else(|e| {
-        #[cfg(windows)]
-        if e.kind() == std::io::ErrorKind::NotFound
-            && !command.contains('.')
-        {
-            let cmd_name = format!("{}.cmd", command);
-            info!(server = %server_name, "Retrying with {}", cmd_name);
-            return try_spawn(&cmd_name);
-        }
-        Err(e)
-    })
-    .map_err(|e| HubError::ProcessSpawn(format!(
-        "Failed to spawn '{}' for server '{}': {}", command, server_name, e
-    )))?;
+    let mut child = try_spawn(command)
+        .or_else(|e| {
+            #[cfg(windows)]
+            if e.kind() == std::io::ErrorKind::NotFound && !command.contains('.') {
+                let cmd_name = format!("{}.cmd", command);
+                info!(server = %server_name, "Retrying with {}", cmd_name);
+                return try_spawn(&cmd_name);
+            }
+            Err(e)
+        })
+        .map_err(|e| {
+            HubError::ProcessSpawn(format!(
+                "Failed to spawn '{}' for server '{}': {}",
+                command, server_name, e
+            ))
+        })?;
 
     info!(server = %server_name, pid = ?child.id(), "STDIO server process started");
 
-    let stdout = child.stdout.take().expect("child stdout is piped");
-    let stdin = child.stdin.take().expect("child stdin is piped");
+    let stdout = child.stdout.take().ok_or_else(|| {
+        HubError::ProcessSpawn(format!(
+            "Failed to acquire stdout handle for server '{}'",
+            server_name
+        ))
+    })?;
+    let stdin = child.stdin.take().ok_or_else(|| {
+        HubError::ProcessSpawn(format!(
+            "Failed to acquire stdin handle for server '{}'",
+            server_name
+        ))
+    })?;
 
     // Create rmcp transport from (stdout, stdin) tuple — IntoTransport is auto-implemented
     let transport = (stdout, stdin);
@@ -82,11 +106,7 @@ pub async fn connect_stdio(
 }
 
 /// Graceful shutdown: SIGTERM → timeout → SIGKILL (from tool-cli pattern).
-pub async fn shutdown_stdio_process(
-    server_name: &str,
-    mut child: Child,
-    timeout_secs: u64,
-) {
+pub async fn shutdown_stdio_process(server_name: &str, mut child: Child, timeout_secs: u64) {
     info!(server = %server_name, "Shutting down STDIO process");
 
     #[cfg(unix)]
@@ -96,10 +116,7 @@ pub async fn shutdown_stdio_process(
         }
     }
 
-    match tokio::time::timeout(
-        tokio::time::Duration::from_secs(timeout_secs),
-        child.wait(),
-    ).await {
+    match tokio::time::timeout(tokio::time::Duration::from_secs(timeout_secs), child.wait()).await {
         Ok(Ok(status)) => info!(server = %server_name, exit = ?status.code(), "Process exited"),
         Ok(Err(e)) => warn!(server = %server_name, error = %e, "Wait error"),
         Err(_) => {

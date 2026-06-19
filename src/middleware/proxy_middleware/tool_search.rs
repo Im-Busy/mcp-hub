@@ -27,11 +27,14 @@
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use std::sync::{Arc, RwLock};
+#[cfg(test)]
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 use tantivy::collector::TopDocs;
 use tantivy::query::QueryParser;
 use tantivy::schema::*;
 use tantivy::{doc, Index, IndexReader, IndexWriter, ReloadPolicy, TantivyDocument};
+use tokio::sync::RwLock;
 use tracing::{error, info};
 
 use crate::middleware::proxy_trait::ProxyMiddleware;
@@ -112,13 +115,15 @@ pub struct ToolSearchMiddleware {
     config: ToolSearchConfig,
 
     /// Tantivy index (in-memory).
-    index: Arc<RwLock<Option<Index>>>,
+    /// Uses std::sync::RwLock — Tantivy types are Sync and std locks don't interfere
+    /// with tokio's cooperative scheduling for read-heavy operations.
+    index: Arc<std::sync::RwLock<Option<Index>>>,
 
     /// Index writer for adding documents.
-    writer: Arc<RwLock<Option<IndexWriter>>>,
+    writer: Arc<std::sync::RwLock<Option<IndexWriter>>>,
 
     /// Index reader for searching.
-    reader: Arc<RwLock<Option<IndexReader>>>,
+    reader: Arc<std::sync::RwLock<Option<IndexReader>>>,
 
     /// Tantivy schema.
     schema: Schema,
@@ -137,6 +142,11 @@ pub struct ToolSearchMiddleware {
 
     /// Whether the search is active (tools > max_tools_limit).
     search_active: Arc<RwLock<bool>>,
+
+    /// Test-only: forces `rebuild_index()` to return an error.
+    /// Allows testing state consistency on rebuild failure.
+    #[cfg(test)]
+    force_rebuild_failure: Arc<AtomicBool>,
 }
 
 impl ToolSearchMiddleware {
@@ -152,9 +162,9 @@ impl ToolSearchMiddleware {
 
         Self {
             config,
-            index: Arc::new(RwLock::new(None)),
-            writer: Arc::new(RwLock::new(None)),
-            reader: Arc::new(RwLock::new(None)),
+            index: Arc::new(std::sync::RwLock::new(None)),
+            writer: Arc::new(std::sync::RwLock::new(None)),
+            reader: Arc::new(std::sync::RwLock::new(None)),
             schema,
             field_name,
             field_description,
@@ -163,6 +173,8 @@ impl ToolSearchMiddleware {
             exposed_tools: Arc::new(RwLock::new(Vec::new())),
             all_tools: Arc::new(RwLock::new(Vec::new())),
             search_active: Arc::new(RwLock::new(false)),
+            #[cfg(test)]
+            force_rebuild_failure: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -175,6 +187,14 @@ impl ToolSearchMiddleware {
 
     /// Build or rebuild the Tantivy index from the current tool list.
     fn rebuild_index(&self, tools: &[AggregatedTool]) -> Result<(), String> {
+        #[cfg(test)]
+        if self
+            .force_rebuild_failure
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            return Err("Forced rebuild failure for testing".to_string());
+        }
+
         info!(tool_count = tools.len(), "Building Tantivy search index");
 
         // Create in-memory index
@@ -186,10 +206,7 @@ impl ToolSearchMiddleware {
 
         // Index each tool
         for tool in tools {
-            let searchable = format!(
-                "{} {} {}",
-                tool.name, tool.description, tool.server_name
-            );
+            let searchable = format!("{} {} {}", tool.name, tool.description, tool.server_name);
 
             let _ = writer.add_document(doc!(
                 self.field_name => tool.name.clone(),
@@ -214,10 +231,7 @@ impl ToolSearchMiddleware {
         *self.writer.write().unwrap() = Some(writer);
         *self.reader.write().unwrap() = Some(reader);
 
-        info!(
-            tool_count = tools.len(),
-            "Search index built successfully"
-        );
+        info!(tool_count = tools.len(), "Search index built successfully");
 
         Ok(())
     }
@@ -235,8 +249,12 @@ impl ToolSearchMiddleware {
 
         // Build query — search across all text fields
         let query_parser = QueryParser::for_index(
-            &self.index.read().unwrap().as_ref().unwrap(),
-            vec![self.field_name, self.field_description, self.field_searchable],
+            self.index.read().unwrap().as_ref().unwrap(),
+            vec![
+                self.field_name,
+                self.field_description,
+                self.field_searchable,
+            ],
         );
 
         let query = query_parser
@@ -250,7 +268,7 @@ impl ToolSearchMiddleware {
 
         let mut results = Vec::new();
         for (score, doc_addr) in top_docs {
-            let score_f32 = score as f32;
+            let score_f32 = score;
 
             // Apply threshold filter
             if score_f32 < self.config.search_threshold {
@@ -299,11 +317,7 @@ impl ToolSearchMiddleware {
             );
         }
 
-        let mut output = format!(
-            "Found {} tool(s) matching '{}':\n\n",
-            results.len(),
-            query
-        );
+        let mut output = format!("Found {} tool(s) matching '{}':\n\n", results.len(), query);
 
         for (i, result) in results.iter().enumerate() {
             output.push_str(&format!(
@@ -321,9 +335,9 @@ impl ToolSearchMiddleware {
     }
 
     /// Get the virtual `search_available_tools` tool definition.
-    pub fn get_search_tool_definition(&self) -> AggregatedTool {
-        let all_count = self.all_tools.read().unwrap().len();
-        let exposed_count = self.exposed_tools.read().unwrap().len();
+    pub async fn get_search_tool_definition(&self) -> AggregatedTool {
+        let all_count = self.all_tools.read().await.len();
+        let exposed_count = self.exposed_tools.read().await.len();
         let hidden = all_count.saturating_sub(exposed_count);
 
         AggregatedTool {
@@ -350,8 +364,8 @@ impl ToolSearchMiddleware {
     }
 
     /// Check if search is active (more tools than the exposure limit).
-    pub fn is_search_active(&self) -> bool {
-        *self.search_active.read().unwrap()
+    pub async fn is_search_active(&self) -> bool {
+        *self.search_active.read().await
     }
 }
 
@@ -360,14 +374,19 @@ impl ProxyMiddleware for ToolSearchMiddleware {
     async fn on_list_tools(&self, tools: &mut Vec<AggregatedTool>) {
         let total = tools.len();
 
-        // Store all tools
-        *self.all_tools.write().unwrap() = tools.clone();
-
-        // Rebuild the search index
+        // STEP 1: Rebuild index FIRST (before modifying any state).
+        // If rebuild_index fails, the old index remains valid and state is unchanged.
         if let Err(e) = self.rebuild_index(tools) {
-            error!(error = %e, "Failed to rebuild search index");
+            error!(
+                error = %e,
+                total = total,
+                "Failed to rebuild search index — keeping previous state"
+            );
             return;
         }
+
+        // STEP 2: Now atomically update all state (rebuild succeeded).
+        *self.all_tools.write().await = tools.clone();
 
         // Select which tools to expose
         if total > self.config.max_tools_limit {
@@ -376,15 +395,13 @@ impl ProxyMiddleware for ToolSearchMiddleware {
                 limit = self.config.max_tools_limit,
                 "Tool count exceeds limit, enabling search"
             );
-            *self.search_active.write().unwrap() = true;
+            *self.search_active.write().await = true;
 
             // Sort tools based on selection order
             match self.config.selection_order {
                 SelectionOrder::ServerPriority => {
                     tools.sort_by(|a, b| {
-                        a.server_name
-                            .cmp(&b.server_name)
-                            .then(a.name.cmp(&b.name))
+                        a.server_name.cmp(&b.server_name).then(a.name.cmp(&b.name))
                     });
                 }
                 SelectionOrder::Alphabetical => {
@@ -396,20 +413,22 @@ impl ProxyMiddleware for ToolSearchMiddleware {
             tools.truncate(self.config.max_tools_limit);
 
             // Inject the search tool
-            let search_tool = self.get_search_tool_definition();
+            let search_tool = self.get_search_tool_definition().await;
             tools.push(search_tool);
 
             // Store exposed tools
-            *self.exposed_tools.write().unwrap() = tools.clone();
+            *self.exposed_tools.write().await = tools.clone();
         } else {
-            *self.search_active.write().unwrap() = false;
-            *self.exposed_tools.write().unwrap() = tools.clone();
+            *self.search_active.write().await = false;
+            *self.exposed_tools.write().await = tools.clone();
         }
+
+        let search_active = self.is_search_active().await;
 
         info!(
             total = total,
             exposed = tools.len(),
-            search_active = self.is_search_active(),
+            search_active,
             "Tool list processed by search middleware"
         );
     }
@@ -452,11 +471,11 @@ mod tests {
         ];
 
         // Store preconditions
-        *mw.all_tools.write().unwrap() = tools.clone();
+        *mw.all_tools.blocking_write() = tools.clone();
         mw.rebuild_index(&tools).unwrap();
 
         // Since on_list_tools is async, test the underlying logic directly
-        assert_eq!(mw.all_tools.read().unwrap().len(), 5);
+        assert_eq!(mw.all_tools.blocking_read().len(), 5);
     }
 
     #[test]
@@ -491,14 +510,14 @@ mod tests {
         assert!(output.contains("github___search_issues"));
     }
 
-    #[test]
-    fn test_get_search_tool_definition() {
+    #[tokio::test]
+    async fn test_get_search_tool_definition() {
         let config = ToolSearchConfig::default();
         let mw = ToolSearchMiddleware::new(config);
-        *mw.all_tools.write().unwrap() = vec![make_tool("a", "s", "d"); 100];
-        *mw.exposed_tools.write().unwrap() = vec![make_tool("a", "s", "d"); 50];
+        *mw.all_tools.write().await = vec![make_tool("a", "s", "d"); 100];
+        *mw.exposed_tools.write().await = vec![make_tool("a", "s", "d"); 50];
 
-        let search_tool = mw.get_search_tool_definition();
+        let search_tool = mw.get_search_tool_definition().await;
         assert_eq!(search_tool.name, "search_available_tools");
         assert_eq!(search_tool.server_name, "mcp-hub");
         assert!(search_tool.description.contains("50 additional"));
@@ -514,10 +533,26 @@ mod tests {
         let mw = ToolSearchMiddleware::new(config);
 
         let tools = vec![
-            make_tool("github___create_issue", "github", "Create a new GitHub issue"),
-            make_tool("github___search_issues", "github", "Search for GitHub issues"),
-            make_tool("filesystem___read_file", "filesystem", "Read a file from disk"),
-            make_tool("filesystem___write_file", "filesystem", "Write content to a file"),
+            make_tool(
+                "github___create_issue",
+                "github",
+                "Create a new GitHub issue",
+            ),
+            make_tool(
+                "github___search_issues",
+                "github",
+                "Search for GitHub issues",
+            ),
+            make_tool(
+                "filesystem___read_file",
+                "filesystem",
+                "Read a file from disk",
+            ),
+            make_tool(
+                "filesystem___write_file",
+                "filesystem",
+                "Write content to a file",
+            ),
             make_tool("database___query", "database", "Run a SQL query"),
         ];
 
@@ -546,6 +581,62 @@ mod tests {
         // Empty results are valid — no matching tools
     }
 
+    #[tokio::test]
+    async fn test_lock_recovery_after_panic() {
+        // Given: a middleware instance with tools indexed
+        let config = ToolSearchConfig {
+            max_tools_limit: 50,
+            search_threshold: 0.0,
+            selection_order: SelectionOrder::Alphabetical,
+        };
+        let mw = ToolSearchMiddleware::new(config);
+
+        let tools = vec![
+            make_tool(
+                "github___create_issue",
+                "github",
+                "Create a new GitHub issue",
+            ),
+            make_tool(
+                "github___search_issues",
+                "github",
+                "Search for GitHub issues",
+            ),
+            make_tool(
+                "filesystem___read_file",
+                "filesystem",
+                "Read a file from disk",
+            ),
+        ];
+        mw.rebuild_index(&tools).unwrap();
+
+        // When: a panic occurs while holding a tokio::sync::RwLock write lock
+        let all_tools = Arc::clone(&mw.all_tools);
+        let result = tokio::task::spawn_blocking(move || {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _guard = all_tools.blocking_write();
+                panic!("simulated crash while holding write lock");
+            }))
+        })
+        .await
+        .unwrap();
+
+        // Then: the panic was caught (lock was released by Drop during unwind)
+        assert!(result.is_err(), "Panic should have been caught");
+
+        // Then: tokio::sync::RwLock does NOT poison — subsequent reads succeed
+        // Use .read().await (not blocking_read()) since we're inside the runtime
+        let tools_len = mw.all_tools.read().await.len();
+        assert_eq!(tools_len, 0, "all_tools should be empty (never populated)");
+
+        // Then: search still works (Tantivy std::sync::RwLocks unaffected)
+        let search_results = mw.search("github").unwrap();
+        assert!(
+            !search_results.is_empty(),
+            "Search should still work after panic"
+        );
+    }
+
     #[test]
     fn test_threshold_filtering() {
         let config = ToolSearchConfig {
@@ -555,13 +646,90 @@ mod tests {
         };
         let mw = ToolSearchMiddleware::new(config);
 
-        let tools = vec![
-            make_tool("github___create", "github", "Create issues"),
-        ];
+        let tools = vec![make_tool("github___create", "github", "Create issues")];
 
         mw.rebuild_index(&tools).unwrap();
         let _results = mw.search("create").unwrap();
         // With high threshold, results may be empty
         // This just verifies the threshold doesn't crash
+    }
+
+    #[tokio::test]
+    async fn test_state_consistency_when_rebuild_fails() {
+        // Given: a middleware with initial tools successfully listed
+        let config = ToolSearchConfig {
+            max_tools_limit: 50,
+            search_threshold: 0.0,
+            selection_order: SelectionOrder::Alphabetical,
+        };
+        let mw = ToolSearchMiddleware::new(config);
+
+        let initial_tools = vec![
+            make_tool(
+                "github___create_issue",
+                "github",
+                "Create a new GitHub issue",
+            ),
+            make_tool(
+                "github___search_issues",
+                "github",
+                "Search for GitHub issues",
+            ),
+            make_tool(
+                "filesystem___read_file",
+                "filesystem",
+                "Read a file from disk",
+            ),
+        ];
+
+        // First successful call sets state
+        mw.on_list_tools(&mut initial_tools.clone()).await;
+
+        let initial_all = mw.all_tools.read().await.clone();
+        let initial_exposed = mw.exposed_tools.read().await.clone();
+        let initial_search_active = *mw.search_active.read().await;
+        assert_eq!(initial_all.len(), 3);
+        assert_eq!(initial_exposed.len(), 3);
+
+        // When: rebuild_index is forced to fail
+        mw.force_rebuild_failure
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+
+        let new_tools = vec![
+            make_tool("other___tool_a", "other", "A different tool"),
+            make_tool("other___tool_b", "other", "Another different tool"),
+        ];
+        mw.on_list_tools(&mut new_tools.clone()).await;
+
+        // Then: all state is unchanged (old state preserved)
+        let after_all = mw.all_tools.read().await.clone();
+        let after_exposed = mw.exposed_tools.read().await.clone();
+        let after_search_active = *mw.search_active.read().await;
+
+        assert_eq!(
+            after_all.len(),
+            initial_all.len(),
+            "all_tools count should be unchanged after rebuild failure"
+        );
+        assert_eq!(
+            after_exposed.len(),
+            initial_exposed.len(),
+            "exposed_tools count should be unchanged after rebuild failure"
+        );
+        // Verify specific tool names are preserved
+        assert_eq!(after_all[0].name, "github___create_issue");
+        assert_eq!(after_all[1].name, "github___search_issues");
+        assert_eq!(after_all[2].name, "filesystem___read_file");
+        assert_eq!(
+            after_search_active, initial_search_active,
+            "search_active should be unchanged after rebuild failure"
+        );
+
+        // Then: the old Tantivy index still works (search still functional)
+        let results = mw.search("github").unwrap();
+        assert!(
+            !results.is_empty(),
+            "Old index should still be searchable after rebuild failure"
+        );
     }
 }
