@@ -1,5 +1,5 @@
 # Whitelist for public repo sync
-# mcp-hub â€” private development â†’ public mirror
+# mcp-hub GÇö private development GåÆ public mirror
 
 # === Source Code ===
 src/
