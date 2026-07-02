@@ -1,0 +1,36 @@
+# Whitelist for public repo sync
+# mcp-hub — private development → public mirror
+
+# === Source Code ===
+src/
+
+# === Tests ===
+tests/
+
+# === Public Documentation ===
+README.md
+
+# === Build & Config ===
+Cargo.toml
+Cargo.lock
+.gitignore
+.gitattributes
+
+# === Installers ===
+install.sh
+install.ps1
+
+# === Example Config ===
+mcp-hub.example.json
+
+# === Docker (public) ===
+docker/
+
+# === Scripts (deployment) ===
+scripts/
+
+# === Web UI (public, future) ===
+web-ui/
+
+# === Agent Protocol (product) ===
+AGENTS.md
