@@ -10,7 +10,11 @@ cargo clippy
 
 ## Architecture
 
-mcp-hub is a Layer 0 MCP proxy that aggregates multiple MCP servers behind a single endpoint. See [README.md](README.md) for the full architecture diagram and feature inventory.
+mcp-hub is an experimental Rust proxy for configured MCP upstreams. See
+[README.md](README.md) for the implemented JSON HTTP interface and limitations.
+`serve`, `status`, and `validate` have operational CLI branches; `inspect`,
+`install`, `publish`, and `host` print placeholders. Module presence does not
+establish that a feature is integrated into the running proxy.
 
 Source layout:
 
@@ -22,12 +26,12 @@ src/
 ├── config.rs        # HubConfig, ServerConfig
 ├── cli.rs           # Clap CLI (7 subcommands)
 ├── error.rs         # Structured error types
-├── transports/      # STDIO, HTTP, Pipe transport
+├── transports/      # STDIO and HTTP; pipe connector is a placeholder
 ├── middleware/       # Dual middleware (Client + Proxy)
-├── package/         # Package management
-├── hosts/           # Host integration
-├── security/        # Auth, encryption, rate limiting
-└── tools/           # Built-in tools (clipboard, search)
+├── package/         # Partial package helpers; CLI install/publish are placeholders
+├── hosts/           # Partial host helpers; CLI host branch is a placeholder
+├── security/        # Security helpers; integration requires verification
+└── tools/           # Time tools and separate clipboard helpers
 ```
 
 ## Tech Stack
@@ -36,4 +40,6 @@ Rust (edition 2021) · rmcp 1.7 · Axum 0.8 · Tokio · Tantivy 0.22 · Clap 4.5
 
 ## License
 
-Apache-2.0
+`Cargo.toml` declares MIT. The public snapshot has no top-level `LICENSE`
+file. Confirm the intended license text with the owner; this documentation
+does not supply or change a license grant. Preserve existing source attribution.

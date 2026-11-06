@@ -1,108 +1,140 @@
 # mcp-hub
 
-[![Rust](https://img.shields.io/badge/rust-edition%202021-orange?logo=rust)](https://www.rust-lang.org/)
-[![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
-[![Status](https://img.shields.io/badge/status-active-brightgreen)](https://github.com/Im-Busy/mcp-hub)
+An experimental Rust proxy that connects to configured MCP servers, aggregates
+their tools with `server___tool` names, and routes calls through a JSON HTTP
+endpoint. This public source includes configuration validation, connection
+status reporting, and built-in time tools.
 
-![divider](https://readme-svg-wave-divider-generator.vercel.app/wave?type=sine&width=1200&height=100&amplitude=20&frequency=2&layers=2&color_top=f97316&color_bottom=7c2d12&opacity=1&flip=false&gradient=false&mirror=false&animate=false)
+The descriptions below reflect source inspection of the `public` branch on
+November 7, 2026. They are not results of a build, runtime test, or MCP
+conformance check.
 
-> Unified MCP management platform — proxy, package manager, inspector, and memory
+## Current Capabilities
 
-## Why mcp-hub?
+| Area | Implemented scope |
+| --- | --- |
+| Proxy | Configured upstream connections, tool aggregation, prefixed routing, connection retries, and health-monitor code |
+| Upstream transports | Child-process stdio and rmcp Streamable HTTP client paths |
+| HTTP listener | JSON routes for `/mcp`, `/health`, `/servers`, and `/tools` |
+| CLI | `serve`, `status`, and `validate` have operational implementations |
+| Built-in tools | Aggregated time tools; clipboard helpers exist separately in the library |
+| Middleware | Library traits, factories, and implementations for logging, filters, enrichment, and search; their presence does not establish enforcement in the active HTTP route |
 
-AI coding agents connect to MCP servers one-by-one — each with its own transport, config, and process. mcp-hub is **Layer 0** — a single endpoint that aggregates all MCP servers (Docker, npx/uvx, remote) behind one proxy. It combines patterns from 16 researched MCP repos into a polyglot architecture: Rust core + TypeScript Web UI + PowerShell orchestration.
+[`src/server.rs`](src/server.rs) dispatches a small set of methods, and
+[`src/proxy.rs`](src/proxy.rs) performs upstream calls. The inbound listener
+is a JSON POST interface. The upstream Streamable HTTP client does not make
+the inbound interface a complete Streamable HTTP or MCP implementation.
+Client compatibility, sessions, notifications, and protocol compliance need
+separate verification.
 
-![divider](https://readme-svg-wave-divider-generator.vercel.app/wave?type=sine&width=1200&height=100&amplitude=20&frequency=2&layers=2&color_top=f97316&color_bottom=7c2d12&opacity=1&flip=false&gradient=false&mirror=false&animate=false)
+## Build From A Source Checkout
 
-## Architecture
-
-```mermaid
----
-config:
-  theme: neutral
-  htmlLabels: false
----
-flowchart TB
-    subgraph CLIENTS [AI Clients — Cursor, Claude, VS Code]
-        C1["JSON-RPC"]
-    end
-
-    CLIENTS --> PROXY
-
-    subgraph PROXY [Layer 0 — mcp-hub Proxy]
-        P1["`Aggregation · Prefixing\nTool routing · Parallel connect\nGraceful degradation`"]
-    end
-
-    PROXY --> MW
-    subgraph MW [Middleware]
-        M1["`Client: Logging · Security\nTool filter: allow/deny`"]
-        M2["`Proxy: Description enricher\nTantivy BM25 tool search`"]
-    end
-
-    MW --> L1
-    MW --> L2
-    MW --> L3
-
-    subgraph L1 [Layer 1 — Docker Services]
-        D1["`graphiti · trendradr\nlangfuse · searxng`"]
-    end
-
-    subgraph L2 [Layer 2 — npx/uvx Tools]
-        D2["`18 local servers\ntavily · exa · playwright\ngithub · context7`"]
-    end
-
-    subgraph L3 [Layer 3 — Remote]
-        D3["`microsoft-learn\ntrendradr · graphiti`"]
-    end
-
-    style CLIENTS fill:#f97316,stroke:#c2410c,color:#fff
-    style PROXY fill:#1a1a2e,stroke:#f97316,color:#e0e0e0
-    style MW fill:#16213e,stroke:#f97316,color:#e0e0e0
-    style L1 fill:#0f3460,stroke:#f97316,color:#e0e0e0
-    style L2 fill:#0f3460,stroke:#f97316,color:#e0e0e0
-    style L3 fill:#0f3460,stroke:#f97316,color:#e0e0e0
-```
-
-| Layer | Capabilities | Status |
-|-------|-------------|:-----:|
-| **Proxy Core** | Tool aggregation, server-name prefixing, tool routing, parallel connect, graceful degradation | ✅ |
-| **Middleware** | Logging, security filtering, tool allow/deny, description enrichment, Tantivy BM25 search | ✅ |
-| **Transports** | STDIO, HTTP Streamable, Named Pipe | ✅ |
-| **Security** | AES-256-GCM encryption, lazy auth, rate limiting | 🟡 |
-| **Package Mgmt** | MCPBX manifest, install/publish from registry | 🟡 |
-| **Web UI** | Interactive inspector, server dashboard, config GUI | 🔜 |
-
-![divider](https://readme-svg-wave-divider-generator.vercel.app/wave?type=sine&width=1200&height=100&amplitude=20&frequency=2&layers=2&color_top=f97316&color_bottom=7c2d12&opacity=1&flip=false&gradient=false&mirror=false&animate=false)
-
-## Quick Start
+Use Rust and Cargo with support for edition 2021, plus the build prerequisites
+required by the declared dependencies. A first build needs registry access
+when dependencies are not cached. No minimum compiler version or cross-platform
+build certification is established by this documentation review.
 
 ```bash
-# Auto-install
-curl -fsSL https://raw.githubusercontent.com/Im-Busy/mcp-hub/main/install.sh | sh
-
-# Run proxy
-mcp-hub serve --config mcp-hub.example.json
-npx mcp-hub serve --config mcp-hub.example.json
-
-# Validate config
-mcp-hub validate --config mcp-hub.example.json
-
-# Check connected servers
-mcp-hub status --config mcp-hub.example.json
+git clone --depth 1 --single-branch --branch public https://github.com/Im-Busy/mcp-hub.git
+cd mcp-hub
+cargo build --release
 ```
 
-| Platform | Install |
-|----------|---------|
-| **Cargo** | `cargo install mcp-hub` |
-| **npx** | `npx mcp-hub serve` |
-| **pip/uvx** | `uvx mcp-hub serve` |
-| **Homebrew** | `brew install mcp-hub` |
-| **Binary** | [GitHub Releases](https://github.com/Im-Busy/mcp-hub/releases) |
+Cargo declares the `mcp-hub` binary at [`src/main.rs`](src/main.rs) and the
+`mcp_hub` library at [`src/lib.rs`](src/lib.rs). Registry publication and
+Cargo/npm/Python/Homebrew packages or release binaries have not been verified.
+The earlier `main/install.sh` URL does not target the public default branch;
+the checked-in installer wrappers are outside this source-build procedure.
 
-## Tech Stack
+## Configuration And Commands
 
-**Rust** · rmcp 1.7 · Axum 0.8 · Tokio · Tantivy 0.22 · Clap 4.5 · tracing · AES-256-GCM · zeroize
+The loader accepts JSON using the structures in
+[`src/config.rs`](src/config.rs). For a local listener without external
+upstreams, use a project-local `hub.local.json` containing:
 
-## License
+```json
+{
+  "mcp_servers": {},
+  "http_server": {
+    "host": "127.0.0.1",
+    "port": 9090,
+    "cors_enabled": false
+  }
+}
+```
 
-Apache-2.0
+The default listener address in source is `127.0.0.1:9090`. This example
+disables permissive CORS. Optional upstream entries use `type: "stdio"` with
+`command`, `args`, and optional `env`, or `type: "http"` with `url` and an
+optional `authorization_token`. Upstream commands, dependencies, permissions,
+and credentials must match your environment.
+
+[`mcp-hub.example.json`](mcp-hub.example.json) contains a broader sample with
+environment-specific paths and credential placeholders. Review and replace
+those values before using it; it is not a portable ready-to-run configuration.
+
+```bash
+# Parse the local JSON configuration; this does not connect to upstreams.
+cargo run --release -- validate --config hub.local.json
+
+# Open upstream connections and print status; this can spawn child processes.
+cargo run --release -- status --config hub.local.json
+
+# Start the HTTP listener and configured upstream connections.
+cargo run --release -- serve --config hub.local.json
+```
+
+These commands describe the declared CLI and were not run in this review.
+`serve` also accepts `--host`, `--port`, and `--no-cors`. `status` creates its
+own connections; it does not query an already-running hub. Running the binary
+without a subcommand starts `serve` behavior using the top-level `--config`
+path, which defaults to `mcp-hub.json`.
+
+Validation loads and deserializes JSON. It does not prove that executables,
+URLs, credentials, middleware, or host integrations work.
+
+## JSON HTTP Endpoints
+
+| Method and path | Source-defined response |
+| --- | --- |
+| `POST /mcp` | Dispatches JSON-RPC methods `initialize`, `notifications/initialized`, `tools/list`, and `tools/call`; unknown methods receive a method-not-found error |
+| `GET /health` | JSON status, version, total/connected server counts, and tool count; `status: "ok"` does not mean all upstreams connected |
+| `GET /servers` | Server names, connection flags, tool counts, and last-refresh fields |
+| `GET /tools` | Aggregated tool names, upstream names, original names, and descriptions |
+
+For example, a tools-list POST body is:
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"tools/list"}
+```
+
+`tools/call` uses a prefixed tool name in `params.name` and optional
+`params.arguments`. The current HTTP handler wraps the proxy result as text;
+do not assume transparent preservation of every upstream result shape.
+
+## Roadmap And Unfinished Interfaces
+
+| Interface | Current limitation |
+| --- | --- |
+| `inspect` | Prints its target/arguments and a Phase 3 placeholder |
+| `install`, `publish` | Print inputs and Phase 2 placeholders; no CLI registry installation or publication |
+| `host` | Prints options and a Phase 2 placeholder; no CLI host registration |
+| Named pipes | `connect_pipe` returns an explicit not-implemented error; JSON upstream config only defines stdio and HTTP |
+| Web UI | `web-ui/index.html` is a Phase 3 placeholder; the HTTP router does not serve an inspector or dashboard |
+| Security, package, host, and clipboard modules | Partial library code does not imply a complete operational service or CLI workflow |
+
+This checkout contains Rust source, an HTML placeholder, PowerShell helpers,
+and Docker-related files. It does not provide the previously advertised
+TypeScript Web UI or a verified universal host/platform setup.
+
+## License And Attribution
+
+[`Cargo.toml`](Cargo.toml) declares MIT. This public snapshot has no top-level
+`LICENSE` file; the owner needs to supply the intended license text. The older
+Apache-2.0 badge and statement disagreed with the manifest. This documentation
+correction does not add or change a license grant.
+
+Source comments credit patterns from MCProxy, tool-cli, MCP Inspector,
+pluggedin-mcp-proxy, and mcp-proxy-tool. Preserve those attributions and check
+dependency licenses separately. See [contributor notes](CONTRIBUTING.md) for
+the source layout and development commands.

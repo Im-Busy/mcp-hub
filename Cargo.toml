@@ -2,7 +2,7 @@
 name = "mcp-hub"
 version = "0.1.0"
 edition = "2021"
-description = "Unified MCP management platform — proxy, package manager, inspector, and memory"
+description = "Experimental Rust proxy for MCP upstreams with tool aggregation, configuration validation, status reporting, and JSON HTTP endpoints."
 authors = ["Joey Chiu"]
 license = "MIT"
 repository = "https://github.com/Im-Busy/mcp-hub"
